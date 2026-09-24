@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vol_calculator"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+    "pandas",
+    "QuantLib",
+    "seaborn",
+    "matplotlib",
+    "scipy",
+    "streamlit",
+]
+
+[tool.setuptools]
+packages = ["vol_calculator"]
