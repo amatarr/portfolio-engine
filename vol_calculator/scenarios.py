@@ -230,7 +230,7 @@ def spot_vol_surface(
     )
 
 
-def breakevens_quadratic(portfolio, market):
+def breakevens_quadratic(portfolio, market, max_move_pct=0.10):
     """
     Fast, closed-form breakeven estimate from a 2nd-order Taylor expansion:
     Delta*dF + 1/2*Gamma*dF^2 + Theta = 0. Accurate for small moves and
@@ -238,10 +238,13 @@ def breakevens_quadratic(portfolio, market):
     kinks (butterflies, 3-ways) -- use breakevens_numerical for those.
 
     Returns the futures MOVE dF in cents from the current price (downside
-    negative, upside positive), not the absolute futures level.
+    negative, upside positive), not the absolute futures level. Roots
+    farther than max_move_pct of spot are returned as None: constant
+    Gamma stops being a valid assumption that far out, so they are
+    Taylor artifacts, not real breakevens.
     """
 
-    delta = GreekEngine.delta(portfolio, market)
+    delta =GreekEngine.delta(portfolio, market)
     gamma = GreekEngine.gamma(portfolio, market)
     theta = GreekEngine.theta(portfolio, market)
 
@@ -260,9 +263,11 @@ def breakevens_quadratic(portfolio, market):
         (-delta - sqrt_disc) / gamma
     ])
 
+    limit = market.futures_price * max_move_pct
+
     return {
-        "downside": moves[0],
-        "upside": moves[1],
+        "downside": moves[0] if abs(moves[0]) <= limit else None,
+        "upside": moves[1] if abs(moves[1]) <= limit else None,
     }
 
 
