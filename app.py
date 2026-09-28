@@ -181,85 +181,115 @@ if "market" not in st.session_state:
 
 st.title("Vol Calculator")
 
-# --- sidebar: market ---
-st.sidebar.header("Market")
+with st.expander("Quick start -- how to use this tool", expanded=False):
+    st.markdown(
+        """
+1. **Set the market** (futures price, interest rate, contract multiplier) in the control panel below.
+2. **Build a portfolio**: pick a leg type, fill in strike / expiry / vol, click *Add to Portfolio*.
+   Or upload a saved portfolio CSV. Remove a position with its **x**.
+3. **Read the tabs** left to right: *Portfolio* (what you hold) -> *Greeks* (sensitivities) ->
+   *Ladders / Surface / Stress* (how risk changes if the market moves) -> *Payoff / Breakevens*
+   (profit and loss shape). Each tab has a short *What is this?* box.
 
-futures_price = st.sidebar.number_input(
-    "Futures Price", value=float(st.session_state.market.futures_price), step=0.25
-)
-interest_rate = st.sidebar.number_input(
-    "Interest Rate", value=float(st.session_state.market.interest_rate), step=0.001, format="%.4f"
-)
-contract_multiplier = st.sidebar.number_input(
-    "Contract Multiplier ($/pt)", value=float(st.session_state.market.contract_multiplier), step=1.0
-)
+Units: Delta and Gamma are in contracts; Vega, Theta, Rho and Value are in $k using the contract multiplier.
+Prices are futures cents per bushel; time is in calendar days.
+        """
+    )
 
-st.session_state.market = Market(
-    futures_price=futures_price,
-    interest_rate=interest_rate,
-    contract_multiplier=contract_multiplier
-)
+# --- control panel (formerly the sidebar) ---
+with st.container(border=True):
 
-# --- sidebar: add leg ---
-st.sidebar.header("Add Leg")
+    col_market, col_add, col_pos = st.columns([1, 1.4, 1.4])
 
-leg_type = st.sidebar.selectbox("Type", list(LEG_BUILDERS.keys()))
-spec = LEG_BUILDERS[leg_type]
+    with col_market:
+        st.subheader("Market")
 
-with st.sidebar.form(f"add_{leg_type}"):
+        futures_price = st.number_input(
+            "Futures Price", value=float(st.session_state.market.futures_price), step=0.25
+        )
+        interest_rate = st.number_input(
+            "Interest Rate", value=float(st.session_state.market.interest_rate), step=0.001, format="%.4f"
+        )
+        contract_multiplier = st.number_input(
+            "Contract Multiplier ($/pt)", value=float(st.session_state.market.contract_multiplier), step=1.0
+        )
 
-    kwargs = {}
-    for field, default in spec["defaults"].items():
-        kwargs[field] = _render_field(field, default)
+        st.session_state.market = Market(
+            futures_price=futures_price,
+            interest_rate=interest_rate,
+            contract_multiplier=contract_multiplier
+        )
 
-    submitted = st.form_submit_button("Add to Portfolio")
+    with col_add:
+        st.subheader("Add Leg")
 
-if submitted:
-    try:
-        instrument = spec["build"](**kwargs)
-        st.session_state.portfolio.add(instrument)
-        st.sidebar.success(f"Added {leg_type}")
-    except Exception as e:
-        st.sidebar.error(str(e))
+        leg_type = st.selectbox("Type", list(LEG_BUILDERS.keys()))
+        spec = LEG_BUILDERS[leg_type]
 
-# --- sidebar: current positions ---
-st.sidebar.header("Current Positions")
+        with st.form(f"add_{leg_type}"):
 
-if not st.session_state.portfolio.positions:
-    st.sidebar.caption("No positions.")
-else:
-    for i, pos in enumerate(st.session_state.portfolio.positions):
-        col1, col2 = st.sidebar.columns([5, 1])
-        col1.text(_leg_label(pos))
-        if col2.button("x", key=f"remove_{i}"):
-            st.session_state.portfolio.positions.pop(i)
+            kwargs = {}
+            for field, default in spec["defaults"].items():
+                kwargs[field] = _render_field(field, default)
+
+            submitted = st.form_submit_button("Add to Portfolio")
+
+        if submitted:
+            try:
+                instrument = spec["build"](**kwargs)
+                st.session_state.portfolio.add(instrument)
+                st.success(f"Added {leg_type}")
+            except Exception as e:
+                st.error(str(e))
+
+    with col_pos:
+        st.subheader("Current Positions")
+
+        if not st.session_state.portfolio.positions:
+            st.caption("No positions.")
+        else:
+            for i, pos in enumerate(st.session_state.portfolio.positions):
+                c_label, c_btn = st.columns([5, 1])
+                c_label.text(_leg_label(pos))
+                if c_btn.button("x", key=f"remove_{i}"):
+                    st.session_state.portfolio.positions.pop(i)
+                    st.rerun()
+
+        if st.button("Clear Portfolio"):
+            st.session_state.portfolio = Portfolio()
             st.rerun()
 
-if st.sidebar.button("Clear Portfolio"):
-    st.session_state.portfolio = Portfolio()
-    st.rerun()
+        st.subheader("Portfolio File")
 
-# --- sidebar: CSV import/export ---
-st.sidebar.header("Portfolio File")
+        uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
 
-uploaded = st.sidebar.file_uploader("Upload CSV", type="csv", key="csv_uploader")
+        if uploaded is not None and st.button("Load uploaded CSV"):
+            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                tmp.write(uploaded.getvalue())
+                tmp_path = tmp.name
+            st.session_state.portfolio = portfolio_from_csv(tmp_path)
+            st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
+            st.rerun()
 
-if uploaded is not None and st.sidebar.button("Load uploaded CSV"):
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-        tmp.write(uploaded.getvalue())
-        tmp_path = tmp.name
-    st.session_state.portfolio = portfolio_from_csv(tmp_path)
-    st.sidebar.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
-    st.rerun()
+        if st.session_state.portfolio.positions:
+            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                portfolio_to_csv(st.session_state.portfolio, tmp.name)
+                with open(tmp.name, "rb") as f:
+                    csv_bytes = f.read()
+            st.download_button(
+                "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
+            )
 
-if st.session_state.portfolio.positions:
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-        portfolio_to_csv(st.session_state.portfolio, tmp.name)
-        with open(tmp.name, "rb") as f:
-            csv_bytes = f.read()
-    st.sidebar.download_button(
-        "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
-    )
+
+def _tab_help(text, formulas=None):
+
+    with st.expander("What is this?"):
+        st.markdown(text)
+
+        if formulas:
+            st.markdown("**Formulas**")
+            for f in formulas:
+                st.latex(f)
 
 
 # --- main area ---
@@ -276,9 +306,13 @@ has_positions = bool(portfolio.positions)
 with tabs[0]:
 
     st.subheader("Current Portfolio")
+    _tab_help(
+        "Your current book, one line per position, and its total value. Check this looks right "
+        "before reading any other tab."
+    )
 
     if not has_positions:
-        st.info("No positions yet -- add one from the sidebar or upload a CSV.")
+        st.info("No positions yet -- add one in the control panel above or upload a CSV.")
     else:
         for i, pos in enumerate(portfolio.positions):
             st.text(f"{i}: {_leg_label(pos)}")
@@ -288,6 +322,25 @@ with tabs[0]:
 with tabs[1]:
 
     st.subheader("Greek Summary")
+    _tab_help(
+        "How the portfolio reacts to small market moves.\n\n"
+        "- **Delta**: effective number of futures contracts you are long/short.\n"
+        "- **Gamma**: change in Delta (contracts) per 1 cent/bu move.\n"
+        "- **Vega**: $k gained/lost per 1% change in vol.\n"
+        "- **Theta**: $k lost per day from time passing.\n"
+        "- **Rho**: $k gained/lost per 1% change in interest rates.\n\n"
+        "The left table is raw (contracts); the right is in $k. *By Tenor* splits the same Greeks by expiry.\n\n"
+        "The formulas below are the European Black-76 definitions the model is built on. The tool prices "
+        "American options with the Barone-Adesi-Whaley approximation and computes every Greek by bumping "
+        "the input and repricing, so the numbers approximate these rather than evaluating them directly.",
+        formulas=[
+            r"d_1 = \frac{\ln(F/K) + \tfrac{1}{2}\sigma^2 T}{\sigma\sqrt{T}}, \qquad d_2 = d_1 - \sigma\sqrt{T}",
+            r"C = e^{-rT}\left[F\,N(d_1) - K\,N(d_2)\right]",
+            r"\Delta = e^{-rT} N(d_1), \qquad \Gamma = \frac{e^{-rT} N'(d_1)}{F\sigma\sqrt{T}}",
+            r"\text{Vega} = F e^{-rT} N'(d_1)\sqrt{T}, \qquad \Theta = -\frac{F e^{-rT} N'(d_1)\,\sigma}{2\sqrt{T}} + rC",
+            r"\rho = \frac{\partial C}{\partial r} = -T\,C",
+        ],
+    )
 
     if not has_positions:
         st.info("Add positions to see Greeks.")
@@ -309,6 +362,10 @@ with tabs[1]:
 with tabs[2]:
 
     st.subheader("Spot Ladder")
+    _tab_help(
+        "Recomputes the portfolio's P&L and Greeks across a range of futures prices (Spot Ladder) and "
+        "vol levels (Vol Ladder), so you can see how risk changes before the market actually moves."
+    )
 
     c1, c2, c3 = st.columns(3)
     spot_low = c1.number_input("Low %", value=-15, step=1, key="spot_low")
@@ -335,6 +392,10 @@ with tabs[2]:
 with tabs[3]:
 
     st.subheader("Spot x Vol Surface")
+    _tab_help(
+        "A heatmap of P&L or a chosen Greek across price and vol at the same time, "
+        "so combined moves are visible at a glance."
+    )
 
     metric = st.selectbox(
         "Metric", ["PnL", "Delta", "Gamma", "Vega", "Volga", "Vanna-D", "Vanna-V"]
@@ -348,6 +409,11 @@ with tabs[3]:
 with tabs[4]:
 
     st.subheader("Stress Ladders")
+    _tab_help(
+        "Pushes one variable at a time (price, time or vol) by set amounts and shows how a Greek moves. "
+        "It reveals risk that is invisible today but appears if the market moves, e.g. Gamma that is "
+        "small now but spikes after a 20 cent drop."
+    )
     st.caption("Delta/Gamma x {price, time, vol}, Vega/Theta x {price, time}")
 
     if has_positions:
@@ -358,6 +424,11 @@ with tabs[4]:
 with tabs[5]:
 
     st.subheader("Strike Map")
+    _tab_help(
+        "A grid of strikes (rows) against expiries (columns), showing where position size is concentrated. "
+        "*quantity* sums raw contracts; *delta* weights each leg by its Delta, showing where directional "
+        "risk sits. Structures are split into their legs and futures are excluded."
+    )
 
     weight = st.radio("Weight", ["quantity", "delta"], horizontal=True)
 
@@ -369,6 +440,10 @@ with tabs[5]:
 with tabs[6]:
 
     st.subheader("Payoff Diagram")
+    _tab_help(
+        "Profit/loss against the futures price, at chosen days forward. A time step of 0 is today; "
+        "larger steps show the position closer to expiry, keeping remaining time value."
+    )
 
     time_steps_str = st.text_input("Time steps (days, comma-separated)", "0,30,64")
     time_steps = [int(x.strip()) for x in time_steps_str.split(",") if x.strip()]
@@ -381,6 +456,16 @@ with tabs[6]:
 with tabs[7]:
 
     st.subheader("Breakevens")
+    _tab_help(
+        "The futures prices where one-day P&L crosses zero (downside and upside). Two estimates are "
+        "shown: a fast quadratic approximation and an exact one that fully reprices the portfolio. "
+        "They should be close; if they diverge, trust the numerical one, especially for butterflies "
+        "and collars. `null` means no breakeven exists in the search range.",
+        formulas=[
+            r"\Delta\,\Delta F + \tfrac{1}{2}\Gamma\,\Delta F^2 + \Theta = 0",
+            r"\Delta F = \frac{-\Delta \pm \sqrt{\Delta^2 - 2\Gamma\Theta}}{\Gamma}",
+        ],
+    )
 
     if has_positions:
 
