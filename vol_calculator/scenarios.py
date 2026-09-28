@@ -236,6 +236,9 @@ def breakevens_quadratic(portfolio, market):
     Delta*dF + 1/2*Gamma*dF^2 + Theta = 0. Accurate for small moves and
     smooth (non-kinked) books; degrades for large moves or structures with
     kinks (butterflies, 3-ways) -- use breakevens_numerical for those.
+
+    Returns the futures MOVE dF in cents from the current price (downside
+    negative, upside positive), not the absolute futures level.
     """
 
     delta = GreekEngine.delta(portfolio, market)
@@ -258,8 +261,8 @@ def breakevens_quadratic(portfolio, market):
     ])
 
     return {
-        "downside": market.futures_price + moves[0],
-        "upside": market.futures_price + moves[1],
+        "downside": moves[0],
+        "upside": moves[1],
     }
 
 
@@ -270,6 +273,9 @@ def breakevens_numerical(portfolio, market, search_pct=0.5, steps=200):
     bracket scan + brentq root-find on the real pricer. No Taylor error,
     so this is the more trustworthy number once a book has kinked
     payoffs (butterflies, 3-ways) where breakevens_quadratic can mislead.
+
+    Returns the futures MOVE dF in cents from the current price (downside
+    negative, upside positive), not the absolute futures level.
     """
 
     shifted = shift_time(portfolio, 1)
@@ -297,9 +303,9 @@ def breakevens_numerical(portfolio, market, search_pct=0.5, steps=200):
             continue
 
         if root <= 0 and downside is None:
-            downside = market.futures_price + root
+            downside = root
         elif root > 0 and upside is None:
-            upside = market.futures_price + root
+            upside = root
 
     return {"downside": downside, "upside": upside}
 

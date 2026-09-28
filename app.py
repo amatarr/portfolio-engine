@@ -457,7 +457,8 @@ with tabs[7]:
 
     st.subheader("Breakevens")
     _tab_help(
-        "The futures prices where one-day P&L crosses zero (downside and upside). Two estimates are "
+        "The futures moves, in cents from the current price (negative = down, positive = up), at which "
+        "one-day P&L crosses zero. Add them to the futures price for the absolute level. Two estimates are "
         "shown: a fast quadratic approximation and an exact one that fully reprices the portfolio. "
         "They should be close; if they diverge, trust the numerical one, especially for butterflies "
         "and collars. `null` means no breakeven exists in the search range.",
