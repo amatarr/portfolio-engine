@@ -34,11 +34,11 @@ def plot_surface(
     )
 
     plt.title(
-        f"{metric} Heatmap\nSpot Move (%) vs Vol Shift (pts)"
+        f"{metric} Heatmap\nSpot Move (¢) vs Vol Shift (pts)"
     )
 
     plt.xlabel("Vol Shift (pts)")
-    plt.ylabel("Spot Move (%)")
+    plt.ylabel("Spot Move (¢)")
 
     plt.show()
 

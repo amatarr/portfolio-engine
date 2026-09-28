@@ -119,9 +119,9 @@ def spot_vol_surface(
     portfolio,
     market,
     metric="PnL",
-    spot_low=-15,
-    spot_high=15,
-    spot_step=3,
+    spot_low=-20,
+    spot_high=20,
+    spot_step=5,
     vol_low=-10,
     vol_high=10,
     vol_step=2
@@ -157,7 +157,7 @@ def spot_vol_surface(
 
             shocked_market.futures_price = (
                 market.futures_price
-                * (1 + spot_move/100)
+                + spot_move
             )
 
             shocked_portfolio = shift_portfolio_vols(
