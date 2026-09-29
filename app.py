@@ -260,12 +260,13 @@ st.title("Vol Calculator")
 with st.expander("Quick start -- how to use this tool", expanded=False):
     st.markdown(
         """
-1. **Set the market** (futures price, interest rate, contract multiplier) in the control panel below.
+1. **Set the market** (contract, futures price, interest rate) in the control panel below.
 2. **Build a portfolio**: pick a leg type, fill in strike / expiry / vol, click *Add to Portfolio*.
-   Or upload a saved portfolio CSV. Remove a position with its **x**.
-3. **Read the tabs** left to right: *Portfolio* (what you hold) -> *Greeks* (sensitivities) ->
-   *Ladders / Surface / Stress* (how risk changes if the market moves) -> *Payoff / Breakevens*
-   (profit and loss shape). Each tab has a short *What is this?* box.
+   Or upload a saved portfolio CSV. Select row(s) in the *Current Positions* table and click
+   *Remove Selected* to take them out.
+3. **Read the tabs** left to right: *Greeks* (sensitivities) -> *Ladders / Surface / Stress*
+   (how risk changes if the market moves) -> *Payoff / Breakevens* (profit and loss shape).
+   Each tab has a short *What is this?* box.
 
 Units: Delta and Gamma are in contracts; Vega, Theta, Rho and Value are in $k using the contract multiplier.
 Prices are futures cents per bushel; time is in calendar days.
@@ -275,7 +276,7 @@ Prices are futures cents per bushel; time is in calendar days.
 # --- control panel (formerly the sidebar) ---
 with st.container(border=True):
 
-    col_market, col_add, col_pos = st.columns([1, 1.4, 1.4])
+    col_market, col_add, col_manage = st.columns([1, 1.4, 1.2])
 
     with col_market:
         st.subheader("Market")
@@ -345,38 +346,15 @@ with st.container(border=True):
             except Exception as e:
                 st.error(str(e))
 
-    with col_pos:
-        st.subheader("Current Positions")
-
-        if not st.session_state.portfolio.positions:
-            st.caption("No positions.")
-        else:
-            table = _positions_table(st.session_state.portfolio)
-            selection = st.dataframe(
-                table,
-                hide_index=True,
-                width="stretch",
-                on_select="rerun",
-                selection_mode="multi-row",
-                key="positions_table",
-            )
-
-            selected_rows = selection["selection"]["rows"]
-            selected_positions = sorted({table.iloc[r]["#"] for r in selected_rows}, reverse=True)
-
-            if selected_positions and st.button(
-                f"Remove Selected ({len(selected_positions)} position(s))"
-            ):
-                for i in selected_positions:
-                    st.session_state.portfolio.positions.pop(i)
-                st.rerun()
+    with col_manage:
+        st.subheader("Manage")
 
         with st.container(key="clear_btn"):
             if st.button("Clear Portfolio"):
                 st.session_state.portfolio = Portfolio()
                 st.rerun()
 
-        st.subheader("Portfolio File")
+        st.caption("Portfolio File")
 
         uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
 
@@ -399,6 +377,34 @@ with st.container(border=True):
                     "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
                 )
 
+    st.divider()
+    st.subheader("Current Positions")
+
+    if not st.session_state.portfolio.positions:
+        st.caption("No positions.")
+    else:
+        table = _positions_table(st.session_state.portfolio)
+        selection = st.dataframe(
+            table,
+            hide_index=True,
+            width="stretch",
+            height=min(38 * (len(table) + 1), 400),
+            column_order=["Group", "Type", "Quantity", "Strike", "Expiry (d)", "Vol"],
+            on_select="rerun",
+            selection_mode="multi-row",
+            key="positions_table",
+        )
+
+        selected_rows = selection["selection"]["rows"]
+        selected_positions = sorted({table.iloc[r]["#"] for r in selected_rows}, reverse=True)
+
+        if selected_positions and st.button(
+            f"Remove Selected ({len(selected_positions)} position(s))"
+        ):
+            for i in selected_positions:
+                st.session_state.portfolio.positions.pop(i)
+            st.rerun()
+
 
 def _tab_help(text, formulas=None):
 
@@ -416,26 +422,13 @@ portfolio = st.session_state.portfolio
 market = st.session_state.market
 
 tabs = st.tabs([
-    "Portfolio", "Greeks", "Ladders", "Surface",
+    "Greeks", "Ladders", "Surface",
     "Stress", "Strike Map", "Payoff", "Breakevens",
 ])
 
 has_positions = bool(portfolio.positions)
 
 with tabs[0]:
-
-    st.subheader("Portfolio Value")
-    _tab_help(
-        "Total value of your current book. Positions themselves are managed in the "
-        "*Current Positions* table in the control panel above -- this tab is just the value readout."
-    )
-
-    if not has_positions:
-        st.info("No positions yet -- add one in the control panel above or upload a CSV.")
-    else:
-        st.metric("Portfolio Value", f"{portfolio.value(market):,.2f}")
-
-with tabs[1]:
 
     st.subheader("Greek Summary")
     _tab_help(
@@ -475,7 +468,7 @@ with tabs[1]:
         st.dataframe(tenor_df)
         _download_df_button(tenor_df, "Download tenor report CSV", "report_by_tenor.csv")
 
-with tabs[2]:
+with tabs[1]:
 
     st.subheader("Spot Ladder")
     _tab_help(
@@ -505,7 +498,7 @@ with tabs[2]:
         st.dataframe(vladder)
         _download_df_button(vladder, "Download vol ladder CSV", "vol_ladder.csv")
 
-with tabs[3]:
+with tabs[2]:
 
     st.subheader("Spot x Vol Surface")
     _tab_help(
@@ -522,7 +515,7 @@ with tabs[3]:
         st.pyplot(plt.gcf())
         plt.close()
 
-with tabs[4]:
+with tabs[3]:
 
     st.subheader("Stress Ladders")
     _tab_help(
@@ -537,7 +530,7 @@ with tabs[4]:
         st.pyplot(plt.gcf())
         plt.close()
 
-with tabs[5]:
+with tabs[4]:
 
     st.subheader("Strike Map")
     _tab_help(
@@ -553,7 +546,7 @@ with tabs[5]:
         st.pyplot(plt.gcf())
         plt.close()
 
-with tabs[6]:
+with tabs[5]:
 
     st.subheader("Payoff Diagram")
     _tab_help(
@@ -569,7 +562,7 @@ with tabs[6]:
         st.pyplot(plt.gcf())
         plt.close()
 
-with tabs[7]:
+with tabs[6]:
 
     st.subheader("Breakevens")
     _tab_help(
