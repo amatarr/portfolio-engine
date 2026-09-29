@@ -13,6 +13,7 @@ dependencies = [
     "matplotlib",
     "scipy",
     "streamlit",
+    "requests",
 ]
 
 [tool.setuptools]

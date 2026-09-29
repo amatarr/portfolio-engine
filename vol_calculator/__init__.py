@@ -31,6 +31,7 @@ from vol_calculator.plotting import (
     plot_payoff,
 )
 from vol_calculator.io import portfolio_to_csv, portfolio_from_csv, export_report
+from vol_calculator.rates import fetch_latest_sofr
 from vol_calculator.structures import (
     call_spread,
     put_spread,
@@ -75,6 +76,7 @@ __all__ = [
     "portfolio_to_csv",
     "portfolio_from_csv",
     "export_report",
+    "fetch_latest_sofr",
     "call_spread",
     "put_spread",
     "straddle",

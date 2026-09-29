@@ -31,9 +31,15 @@ from vol_calculator import (
     plot_payoff,
     portfolio_to_csv,
     portfolio_from_csv,
+    fetch_latest_sofr,
 )
 
 st.set_page_config(page_title="Vol Calculator", layout="wide")
+
+
+@st.cache_data(ttl=4 * 60 * 60)
+def _cached_sofr():
+    return fetch_latest_sofr()
 
 
 def _require_password():
@@ -176,7 +182,12 @@ if "portfolio" not in st.session_state:
     st.session_state.portfolio = _default_portfolio()
 
 if "market" not in st.session_state:
-    st.session_state.market = Market(futures_price=528.75, interest_rate=0.038)
+    try:
+        _sofr = _cached_sofr()
+        _default_rate = _sofr["rate"]
+    except Exception:
+        _default_rate = 0.038
+    st.session_state.market = Market(futures_price=528.75, interest_rate=_default_rate)
 
 
 st.title("Vol Calculator")
@@ -210,6 +221,17 @@ with st.container(border=True):
         interest_rate = st.number_input(
             "Interest Rate", value=float(st.session_state.market.interest_rate), step=0.001, format="%.4f"
         )
+
+        try:
+            _sofr = _cached_sofr()
+            st.caption(
+                f"SOFR: {_sofr['rate'] * 100:.2f}% "
+                f"(updated {_sofr['effective_date']}) -- "
+                f"[NY Fed]({_sofr['source_url']})"
+            )
+        except Exception:
+            st.caption("SOFR unavailable -- using manually entered rate.")
+
         contract_multiplier = st.number_input(
             "Contract Multiplier ($/pt)", value=float(st.session_state.market.contract_multiplier), step=1.0
         )
