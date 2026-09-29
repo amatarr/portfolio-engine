@@ -36,6 +36,36 @@ from vol_calculator import (
 
 st.set_page_config(page_title="Vol Calculator", layout="wide")
 
+st.markdown(
+    """
+    <style>
+    div[data-testid="stNumberInput"] { max-width: 170px; }
+    div[data-testid="stTextInput"] { max-width: 240px; }
+    div[data-testid="stSelectbox"] { max-width: 240px; }
+
+    .st-key-add_leg_btn button {
+        background-color: #2e7d32; color: white; border-color: #1b5e20;
+    }
+    .st-key-add_leg_btn button:hover {
+        background-color: #388e3c; border-color: #1b5e20; color: white;
+    }
+    .st-key-clear_btn button {
+        background-color: #c62828; color: white; border-color: #8e0000;
+    }
+    .st-key-clear_btn button:hover {
+        background-color: #d32f2f; border-color: #8e0000; color: white;
+    }
+    .st-key-file_btns button {
+        background-color: #000000; color: white; border-color: #000000;
+    }
+    .st-key-file_btns button:hover {
+        background-color: #262626; border-color: #000000; color: white;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 @st.cache_data(ttl=4 * 60 * 60)
 def _cached_sofr():
@@ -165,6 +195,30 @@ def _leg_label(pos):
     return repr(pos)
 
 
+def _position_row(pos):
+
+    if isinstance(pos, Future):
+        return {
+            "Type": "Future", "Detail": "-", "Quantity": pos.quantity,
+            "Strike": None, "Expiry (d)": None, "Vol": None,
+        }
+
+    if isinstance(pos, AmericanOption):
+        return {
+            "Type": "Option", "Detail": pos.option_type, "Quantity": pos.quantity,
+            "Strike": pos.strike, "Expiry (d)": pos.expiry_days, "Vol": pos.volatility,
+        }
+
+    return {
+        "Type": "Structure", "Detail": pos.name or "-", "Quantity": len(pos.legs),
+        "Strike": None, "Expiry (d)": None, "Vol": None,
+    }
+
+
+def _positions_table(portfolio):
+    return pd.DataFrame([_position_row(p) for p in portfolio.positions])
+
+
 def _default_portfolio():
 
     portfolio = Portfolio()
@@ -254,7 +308,8 @@ with st.container(border=True):
             for field, default in spec["defaults"].items():
                 kwargs[field] = _render_field(field, default)
 
-            submitted = st.form_submit_button("Add to Portfolio")
+            with st.container(key="add_leg_btn"):
+                submitted = st.form_submit_button("Add to Portfolio")
 
         if submitted:
             try:
@@ -270,37 +325,50 @@ with st.container(border=True):
         if not st.session_state.portfolio.positions:
             st.caption("No positions.")
         else:
-            for i, pos in enumerate(st.session_state.portfolio.positions):
-                c_label, c_btn = st.columns([5, 1])
-                c_label.text(_leg_label(pos))
-                if c_btn.button("x", key=f"remove_{i}"):
-                    st.session_state.portfolio.positions.pop(i)
-                    st.rerun()
+            table = _positions_table(st.session_state.portfolio)
+            selection = st.dataframe(
+                table,
+                hide_index=True,
+                width="stretch",
+                on_select="rerun",
+                selection_mode="multi-row",
+                key="positions_table",
+            )
 
-        if st.button("Clear Portfolio"):
-            st.session_state.portfolio = Portfolio()
-            st.rerun()
+            selected_rows = selection["selection"]["rows"]
+
+            if selected_rows and st.button(f"Remove Selected ({len(selected_rows)})"):
+                for i in sorted(selected_rows, reverse=True):
+                    st.session_state.portfolio.positions.pop(i)
+                st.rerun()
+
+        with st.container(key="clear_btn"):
+            if st.button("Clear Portfolio"):
+                st.session_state.portfolio = Portfolio()
+                st.rerun()
 
         st.subheader("Portfolio File")
 
         uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
 
-        if uploaded is not None and st.button("Load uploaded CSV"):
-            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                tmp.write(uploaded.getvalue())
-                tmp_path = tmp.name
-            st.session_state.portfolio = portfolio_from_csv(tmp_path)
-            st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
-            st.rerun()
+        with st.container(key="file_btns"):
 
-        if st.session_state.portfolio.positions:
-            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                portfolio_to_csv(st.session_state.portfolio, tmp.name)
-                with open(tmp.name, "rb") as f:
-                    csv_bytes = f.read()
-            st.download_button(
-                "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
-            )
+            if uploaded is not None and st.button("Load uploaded CSV"):
+                with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                    tmp.write(uploaded.getvalue())
+                    tmp_path = tmp.name
+                st.session_state.portfolio = portfolio_from_csv(tmp_path)
+                st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
+                st.rerun()
+
+            if st.session_state.portfolio.positions:
+                with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                    portfolio_to_csv(st.session_state.portfolio, tmp.name)
+                    with open(tmp.name, "rb") as f:
+                        csv_bytes = f.read()
+                st.download_button(
+                    "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
+                )
 
 
 def _tab_help(text, formulas=None):
@@ -327,18 +395,15 @@ has_positions = bool(portfolio.positions)
 
 with tabs[0]:
 
-    st.subheader("Current Portfolio")
+    st.subheader("Portfolio Value")
     _tab_help(
-        "Your current book, one line per position, and its total value. Check this looks right "
-        "before reading any other tab."
+        "Total value of your current book. Positions themselves are managed in the "
+        "*Current Positions* table in the control panel above -- this tab is just the value readout."
     )
 
     if not has_positions:
         st.info("No positions yet -- add one in the control panel above or upload a CSV.")
     else:
-        for i, pos in enumerate(portfolio.positions):
-            st.text(f"{i}: {_leg_label(pos)}")
-
         st.metric("Portfolio Value", f"{portfolio.value(market):,.2f}")
 
 with tabs[1]:
