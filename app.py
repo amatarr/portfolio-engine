@@ -187,7 +187,10 @@ def _render_field(container, name, default):
         return int(container.number_input(name, value=int(default), step=1))
 
     if "vol" in name:
-        return container.number_input(name, value=float(default), step=0.01, format="%.4f")
+        pct = container.number_input(
+            f"{name} (%)", value=float(default) * 100, step=0.1, format="%.2f"
+        )
+        return pct / 100
 
     return container.number_input(name, value=float(default), step=1.0)
 
@@ -214,14 +217,14 @@ def _leg_row(leg, position_index, structure, contract):
     if isinstance(leg, Future):
         return {
             "#": position_index, "Contract": contract, "Structure": structure, "Type": "Future",
-            "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None, "Vol": None,
+            "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None, "Vol (%)": None,
         }
 
     return {
         "#": position_index, "Contract": contract, "Structure": structure,
         "Type": "Call" if leg.option_type == "call" else "Put",
         "Quantity": leg.quantity, "Strike": leg.strike,
-        "Expiry (d)": leg.expiry_days, "Vol": leg.volatility,
+        "Expiry (d)": leg.expiry_days, "Vol (%)": leg.volatility * 100,
     }
 
 
@@ -405,7 +408,7 @@ with st.container(border=True):
             hide_index=True,
             width="stretch",
             height=min(38 * (len(table) + 1), 400),
-            column_order=["Contract", "Structure", "Type", "Quantity", "Strike", "Expiry (d)", "Vol"],
+            column_order=["Contract", "Structure", "Type", "Quantity", "Strike", "Expiry (d)", "Vol (%)"],
             on_select="rerun",
             selection_mode="multi-row",
             key="positions_table",
