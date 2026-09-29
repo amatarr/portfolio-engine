@@ -1,3 +1,4 @@
+import re
 import tempfile
 
 import matplotlib
@@ -59,10 +60,10 @@ st.markdown(
     .st-key-clear_btn button:hover {
         background-color: #d32f2f; border-color: #8e0000; color: white;
     }
-    .st-key-file_btns button {
+    .st-key-file_btn_load button, .st-key-file_btn_download button {
         background-color: #000000; color: white; border-color: #000000;
     }
-    .st-key-file_btns button:hover {
+    .st-key-file_btn_load button:hover, .st-key-file_btn_download button:hover {
         background-color: #262626; border-color: #000000; color: white;
     }
     </style>
@@ -176,19 +177,19 @@ LEG_BUILDERS = {
 }
 
 
-def _render_field(name, default):
+def _render_field(container, name, default):
 
     if name == "option_type":
         options = ["call", "put"]
-        return st.selectbox(name, options, index=options.index(default))
+        return container.selectbox(name, options, index=options.index(default))
 
     if "days" in name:
-        return int(st.number_input(name, value=int(default), step=1))
+        return int(container.number_input(name, value=int(default), step=1))
 
     if "vol" in name:
-        return st.number_input(name, value=float(default), step=0.01, format="%.4f")
+        return container.number_input(name, value=float(default), step=0.01, format="%.4f")
 
-    return st.number_input(name, value=float(default), step=1.0)
+    return container.number_input(name, value=float(default), step=1.0)
 
 
 def _leg_label(pos):
@@ -199,33 +200,42 @@ def _leg_label(pos):
     return repr(pos)
 
 
-def _leg_row(leg, position_index, group):
+def _structure_kind(name):
+
+    if not name:
+        return "Structure"
+
+    kind = name.split("(")[0]
+    return re.sub(r"(?<!^)(?=[A-Z])", " ", kind)
+
+
+def _leg_row(leg, position_index, structure, contract):
 
     if isinstance(leg, Future):
         return {
-            "#": position_index, "Group": group, "Type": "Future",
+            "#": position_index, "Contract": contract, "Structure": structure, "Type": "Future",
             "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None, "Vol": None,
         }
 
     return {
-        "#": position_index, "Group": group,
+        "#": position_index, "Contract": contract, "Structure": structure,
         "Type": "Call" if leg.option_type == "call" else "Put",
         "Quantity": leg.quantity, "Strike": leg.strike,
         "Expiry (d)": leg.expiry_days, "Vol": leg.volatility,
     }
 
 
-def _positions_table(portfolio):
+def _positions_table(portfolio, contract):
 
     rows = []
 
     for i, pos in enumerate(portfolio.positions):
 
         if isinstance(pos, Structure):
-            group = pos.name or "Structure"
-            rows.extend(_leg_row(leg, i, group) for leg in pos.legs)
+            structure = _structure_kind(pos.name)
+            rows.extend(_leg_row(leg, i, structure, contract) for leg in pos.legs)
         else:
-            rows.append(_leg_row(pos, i, "-"))
+            rows.append(_leg_row(pos, i, "-", contract))
 
     return pd.DataFrame(rows)
 
@@ -276,7 +286,7 @@ Prices are futures cents per bushel; time is in calendar days.
 # --- control panel (formerly the sidebar) ---
 with st.container(border=True):
 
-    col_market, col_add, col_manage = st.columns([1, 1.4, 1.2])
+    col_market, col_add = st.columns([1, 2])
 
     with col_market:
         st.subheader("Market")
@@ -331,9 +341,11 @@ with st.container(border=True):
 
         with st.form(f"add_{leg_type}"):
 
+            field_cols = st.columns(len(spec["defaults"]))
+
             kwargs = {}
-            for field, default in spec["defaults"].items():
-                kwargs[field] = _render_field(field, default)
+            for col, (field, default) in zip(field_cols, spec["defaults"].items()):
+                kwargs[field] = _render_field(col, field, default)
 
             with st.container(key="add_leg_btn"):
                 submitted = st.form_submit_button("Add to Portfolio")
@@ -346,20 +358,22 @@ with st.container(border=True):
             except Exception as e:
                 st.error(str(e))
 
-    with col_manage:
-        st.subheader("Manage")
+    st.divider()
+    st.subheader("Manage")
 
+    mc_clear, mc_upload, mc_load, mc_download = st.columns([1, 2, 1, 1.4])
+
+    with mc_clear:
         with st.container(key="clear_btn"):
             if st.button("Clear Portfolio"):
                 st.session_state.portfolio = Portfolio()
                 st.rerun()
 
-        st.caption("Portfolio File")
-
+    with mc_upload:
         uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
 
-        with st.container(key="file_btns"):
-
+    with mc_load:
+        with st.container(key="file_btn_load"):
             if uploaded is not None and st.button("Load uploaded CSV"):
                 with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
                     tmp.write(uploaded.getvalue())
@@ -368,6 +382,8 @@ with st.container(border=True):
                 st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
                 st.rerun()
 
+    with mc_download:
+        with st.container(key="file_btn_download"):
             if st.session_state.portfolio.positions:
                 with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
                     portfolio_to_csv(st.session_state.portfolio, tmp.name)
@@ -383,13 +399,14 @@ with st.container(border=True):
     if not st.session_state.portfolio.positions:
         st.caption("No positions.")
     else:
-        table = _positions_table(st.session_state.portfolio)
+        current_contract = contract_code(commodity, month_code, year)
+        table = _positions_table(st.session_state.portfolio, current_contract)
         selection = st.dataframe(
             table,
             hide_index=True,
             width="stretch",
             height=min(38 * (len(table) + 1), 400),
-            column_order=["Group", "Type", "Quantity", "Strike", "Expiry (d)", "Vol"],
+            column_order=["Contract", "Structure", "Type", "Quantity", "Strike", "Expiry (d)", "Vol"],
             on_select="rerun",
             selection_mode="multi-row",
             key="positions_table",
