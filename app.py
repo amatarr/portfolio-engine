@@ -199,28 +199,35 @@ def _leg_label(pos):
     return repr(pos)
 
 
-def _position_row(pos):
+def _leg_row(leg, position_index, group):
 
-    if isinstance(pos, Future):
+    if isinstance(leg, Future):
         return {
-            "Type": "Future", "Detail": "-", "Quantity": pos.quantity,
-            "Strike": None, "Expiry (d)": None, "Vol": None,
-        }
-
-    if isinstance(pos, AmericanOption):
-        return {
-            "Type": "Option", "Detail": pos.option_type, "Quantity": pos.quantity,
-            "Strike": pos.strike, "Expiry (d)": pos.expiry_days, "Vol": pos.volatility,
+            "#": position_index, "Group": group, "Type": "Future",
+            "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None, "Vol": None,
         }
 
     return {
-        "Type": "Structure", "Detail": pos.name or "-", "Quantity": len(pos.legs),
-        "Strike": None, "Expiry (d)": None, "Vol": None,
+        "#": position_index, "Group": group,
+        "Type": "Call" if leg.option_type == "call" else "Put",
+        "Quantity": leg.quantity, "Strike": leg.strike,
+        "Expiry (d)": leg.expiry_days, "Vol": leg.volatility,
     }
 
 
 def _positions_table(portfolio):
-    return pd.DataFrame([_position_row(p) for p in portfolio.positions])
+
+    rows = []
+
+    for i, pos in enumerate(portfolio.positions):
+
+        if isinstance(pos, Structure):
+            group = pos.name or "Structure"
+            rows.extend(_leg_row(leg, i, group) for leg in pos.legs)
+        else:
+            rows.append(_leg_row(pos, i, "-"))
+
+    return pd.DataFrame(rows)
 
 
 def _default_portfolio():
@@ -355,9 +362,12 @@ with st.container(border=True):
             )
 
             selected_rows = selection["selection"]["rows"]
+            selected_positions = sorted({table.iloc[r]["#"] for r in selected_rows}, reverse=True)
 
-            if selected_rows and st.button(f"Remove Selected ({len(selected_rows)})"):
-                for i in sorted(selected_rows, reverse=True):
+            if selected_positions and st.button(
+                f"Remove Selected ({len(selected_positions)} position(s))"
+            ):
+                for i in selected_positions:
                     st.session_state.portfolio.positions.pop(i)
                 st.rerun()
 
