@@ -32,6 +32,10 @@ from vol_calculator import (
     portfolio_to_csv,
     portfolio_from_csv,
     fetch_latest_sofr,
+    COMMODITIES,
+    MONTH_CODES,
+    contract_code,
+    multiplier_for,
 )
 
 st.set_page_config(page_title="Vol Calculator", layout="wide")
@@ -269,12 +273,28 @@ with st.container(border=True):
     with col_market:
         st.subheader("Market")
 
+        commodity = st.selectbox("Underlying", list(COMMODITIES.keys()))
+        available_months = COMMODITIES[commodity]["months"]
+
+        c_month, c_year = st.columns(2)
+        month_code = c_month.selectbox(
+            "Month", available_months,
+            format_func=lambda m: f"{m} ({MONTH_CODES[m]})",
+        )
+        year = c_year.number_input("Year", value=2026, step=1, format="%d")
+
+        st.caption(f"Contract: {contract_code(commodity, month_code, year)}")
+
         futures_price = st.number_input(
             "Futures Price", value=float(st.session_state.market.futures_price), step=0.25
         )
-        interest_rate = st.number_input(
-            "Interest Rate", value=float(st.session_state.market.interest_rate), step=0.001, format="%.4f"
+        st.caption("Manual entry for now -- live Bushel/CQG feed not yet connected.")
+
+        interest_rate_pct = st.number_input(
+            "Interest Rate (%)", value=float(st.session_state.market.interest_rate) * 100,
+            step=0.01, format="%.2f",
         )
+        interest_rate = interest_rate_pct / 100
 
         try:
             _sofr = _cached_sofr()
@@ -286,9 +306,8 @@ with st.container(border=True):
         except Exception:
             st.caption("SOFR unavailable -- using manually entered rate.")
 
-        contract_multiplier = st.number_input(
-            "Contract Multiplier ($/pt)", value=float(st.session_state.market.contract_multiplier), step=1.0
-        )
+        contract_multiplier = multiplier_for(commodity)
+        st.caption(f"Contract Multiplier: ${contract_multiplier:.0f}/pt (auto, {commodity})")
 
         st.session_state.market = Market(
             futures_price=futures_price,

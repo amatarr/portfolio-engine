@@ -32,6 +32,7 @@ from vol_calculator.plotting import (
 )
 from vol_calculator.io import portfolio_to_csv, portfolio_from_csv, export_report
 from vol_calculator.rates import fetch_latest_sofr
+from vol_calculator.contracts import COMMODITIES, MONTH_CODES, contract_code, multiplier_for
 from vol_calculator.structures import (
     call_spread,
     put_spread,
@@ -77,6 +78,10 @@ __all__ = [
     "portfolio_from_csv",
     "export_report",
     "fetch_latest_sofr",
+    "COMMODITIES",
+    "MONTH_CODES",
+    "contract_code",
+    "multiplier_for",
     "call_spread",
     "put_spread",
     "straddle",
