@@ -358,40 +358,39 @@ with st.container(border=True):
             except Exception as e:
                 st.error(str(e))
 
-    st.divider()
-    st.subheader("Manage")
+        st.subheader("Manage")
 
-    mc_clear, mc_upload, mc_load, mc_download = st.columns([1, 2, 1, 1.4])
+        mc_clear, mc_upload, mc_load, mc_download = st.columns([1, 2, 1, 1.4])
 
-    with mc_clear:
-        with st.container(key="clear_btn"):
-            if st.button("Clear Portfolio"):
-                st.session_state.portfolio = Portfolio()
-                st.rerun()
+        with mc_clear:
+            with st.container(key="clear_btn"):
+                if st.button("Clear Portfolio"):
+                    st.session_state.portfolio = Portfolio()
+                    st.rerun()
 
-    with mc_upload:
-        uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
+        with mc_upload:
+            uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
 
-    with mc_load:
-        with st.container(key="file_btn_load"):
-            if uploaded is not None and st.button("Load uploaded CSV"):
-                with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                    tmp.write(uploaded.getvalue())
-                    tmp_path = tmp.name
-                st.session_state.portfolio = portfolio_from_csv(tmp_path)
-                st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
-                st.rerun()
+        with mc_load:
+            with st.container(key="file_btn_load"):
+                if uploaded is not None and st.button("Load uploaded CSV"):
+                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                        tmp.write(uploaded.getvalue())
+                        tmp_path = tmp.name
+                    st.session_state.portfolio = portfolio_from_csv(tmp_path)
+                    st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
+                    st.rerun()
 
-    with mc_download:
-        with st.container(key="file_btn_download"):
-            if st.session_state.portfolio.positions:
-                with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                    portfolio_to_csv(st.session_state.portfolio, tmp.name)
-                    with open(tmp.name, "rb") as f:
-                        csv_bytes = f.read()
-                st.download_button(
-                    "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
-                )
+        with mc_download:
+            with st.container(key="file_btn_download"):
+                if st.session_state.portfolio.positions:
+                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                        portfolio_to_csv(st.session_state.portfolio, tmp.name)
+                        with open(tmp.name, "rb") as f:
+                            csv_bytes = f.read()
+                    st.download_button(
+                        "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
+                    )
 
     st.divider()
     st.subheader("Current Positions")
