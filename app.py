@@ -37,6 +37,7 @@ from vol_calculator import (
     MONTH_CODES,
     contract_code,
     multiplier_for,
+    import_bushel_positions,
 )
 
 st.set_page_config(page_title="Vol Calculator", layout="wide")
@@ -60,10 +61,10 @@ st.markdown(
     .st-key-clear_btn button:hover {
         background-color: #d32f2f; border-color: #8e0000; color: white;
     }
-    .st-key-file_btn_load button, .st-key-file_btn_download button {
+    .st-key-file_btn_load button, .st-key-file_btn_download button, .st-key-file_btn_import button {
         background-color: #000000; color: white; border-color: #000000;
     }
-    .st-key-file_btn_load button:hover, .st-key-file_btn_download button:hover {
+    .st-key-file_btn_load button:hover, .st-key-file_btn_download button:hover, .st-key-file_btn_import button:hover {
         background-color: #262626; border-color: #000000; color: white;
     }
     </style>
@@ -212,12 +213,12 @@ def _structure_kind(name):
     return re.sub(r"(?<!^)(?=[A-Z])", " ", kind)
 
 
-def _leg_row(leg, position_index, structure, contract):
+def _leg_row(leg, position_index, structure, contract, future_vol_pct=None):
 
     if isinstance(leg, Future):
         return {
             "#": position_index, "Contract": contract, "Structure": structure, "Type": "Future",
-            "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None, "Vol (%)": None,
+            "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None, "Vol (%)": future_vol_pct,
         }
 
     return {
@@ -228,19 +229,34 @@ def _leg_row(leg, position_index, structure, contract):
     }
 
 
-def _positions_table(portfolio, contract):
+def _positions_table_for_commodity(portfolio, meta, commodity):
 
     rows = []
 
     for i, pos in enumerate(portfolio.positions):
 
+        if meta[i].get("commodity") != commodity:
+            continue
+
+        contract = meta[i].get("contract") or "-"
+
         if isinstance(pos, Structure):
             structure = _structure_kind(pos.name)
             rows.extend(_leg_row(leg, i, structure, contract) for leg in pos.legs)
         else:
-            rows.append(_leg_row(pos, i, "-", contract))
+            rows.append(_leg_row(pos, i, "-", contract, future_vol_pct=meta[i].get("vol_pct")))
 
     return pd.DataFrame(rows)
+
+
+def _commodities_present(meta):
+
+    seen = []
+    for m in meta:
+        c = m.get("commodity", "Unknown")
+        if c not in seen:
+            seen.append(c)
+    return seen
 
 
 def _default_portfolio():
@@ -258,6 +274,16 @@ def _download_df_button(df, label, filename):
 
 if "portfolio" not in st.session_state:
     st.session_state.portfolio = _default_portfolio()
+    st.session_state.position_meta = [
+        {"commodity": "Corn", "contract": None, "vol_pct": None}
+        for _ in st.session_state.portfolio.positions
+    ]
+
+if "position_meta" not in st.session_state:
+    st.session_state.position_meta = [
+        {"commodity": "Corn", "contract": None, "vol_pct": None}
+        for _ in st.session_state.portfolio.positions
+    ]
 
 if "market" not in st.session_state:
     try:
@@ -357,6 +383,11 @@ with st.container(border=True):
             try:
                 instrument = spec["build"](**kwargs)
                 st.session_state.portfolio.add(instrument)
+                st.session_state.position_meta.append({
+                    "commodity": commodity,
+                    "contract": contract_code(commodity, month_code, year),
+                    "vol_pct": None,
+                })
                 st.success(f"Added {leg_type}")
             except Exception as e:
                 st.error(str(e))
@@ -369,6 +400,7 @@ with st.container(border=True):
             with st.container(key="clear_btn"):
                 if st.button("Clear Portfolio"):
                     st.session_state.portfolio = Portfolio()
+                    st.session_state.position_meta = []
                     st.rerun()
 
         with mc_upload:
@@ -381,6 +413,10 @@ with st.container(border=True):
                         tmp.write(uploaded.getvalue())
                         tmp_path = tmp.name
                     st.session_state.portfolio = portfolio_from_csv(tmp_path)
+                    st.session_state.position_meta = [
+                        {"commodity": commodity, "contract": None, "vol_pct": None}
+                        for _ in st.session_state.portfolio.positions
+                    ]
                     st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
                     st.rerun()
 
@@ -395,34 +431,66 @@ with st.container(border=True):
                         "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
                     )
 
+        st.caption("Import Positions File (Bushel-style export, keeps existing positions)")
+
+        mc_import_up, mc_import_btn = st.columns([2, 1.4])
+
+        with mc_import_up:
+            imported_file = st.file_uploader(
+                "Upload positions file", type="csv", key="bushel_uploader", label_visibility="collapsed"
+            )
+
+        with mc_import_btn:
+            with st.container(key="file_btn_import"):
+                if imported_file is not None and st.button("Add Imported Positions"):
+                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                        tmp.write(imported_file.getvalue())
+                        tmp_path = tmp.name
+                    try:
+                        imported = import_bushel_positions(tmp_path)
+                        for instrument, meta in imported:
+                            st.session_state.portfolio.add(instrument)
+                            st.session_state.position_meta.append(meta)
+                        st.success(f"Added {len(imported)} imported position(s)")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Import failed: {e}")
+
     st.divider()
     st.subheader("Current Positions")
 
     if not st.session_state.portfolio.positions:
         st.caption("No positions.")
     else:
-        current_contract = contract_code(commodity, month_code, year)
-        table = _positions_table(st.session_state.portfolio, current_contract)
-        selection = st.dataframe(
-            table,
-            hide_index=True,
-            width="stretch",
-            height=min(38 * (len(table) + 1), 400),
-            column_order=["Contract", "Structure", "Type", "Quantity", "Strike", "Expiry (d)", "Vol (%)"],
-            on_select="rerun",
-            selection_mode="multi-row",
-            key="positions_table",
-        )
+        meta = st.session_state.position_meta
 
-        selected_rows = selection["selection"]["rows"]
-        selected_positions = sorted({table.iloc[r]["#"] for r in selected_rows}, reverse=True)
+        for group_commodity in _commodities_present(meta):
 
-        if selected_positions and st.button(
-            f"Remove Selected ({len(selected_positions)} position(s))"
-        ):
-            for i in selected_positions:
-                st.session_state.portfolio.positions.pop(i)
-            st.rerun()
+            st.markdown(f"**{group_commodity} Positions**")
+
+            table = _positions_table_for_commodity(st.session_state.portfolio, meta, group_commodity)
+            selection = st.dataframe(
+                table,
+                hide_index=True,
+                width="stretch",
+                height=min(38 * (len(table) + 1), 400),
+                column_order=["Contract", "Structure", "Type", "Quantity", "Strike", "Expiry (d)", "Vol (%)"],
+                on_select="rerun",
+                selection_mode="multi-row",
+                key=f"positions_table_{group_commodity}",
+            )
+
+            selected_rows = selection["selection"]["rows"]
+            selected_positions = sorted({table.iloc[r]["#"] for r in selected_rows}, reverse=True)
+
+            if selected_positions and st.button(
+                f"Remove Selected ({len(selected_positions)} position(s))",
+                key=f"remove_btn_{group_commodity}",
+            ):
+                for i in selected_positions:
+                    st.session_state.portfolio.positions.pop(i)
+                    st.session_state.position_meta.pop(i)
+                st.rerun()
 
 
 def _tab_help(text, formulas=None):
