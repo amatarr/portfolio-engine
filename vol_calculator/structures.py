@@ -1,7 +1,7 @@
 from vol_calculator.instruments import AmericanOption, Structure
 
 
-def call_spread(quantity, k_long, k_short, expiry_days, vol_long, vol_short):
+def call_spread(quantity, k_long, k_short, expiry_days, vol_long, vol_short, contract=None):
 
     if k_long >= k_short:
         raise ValueError("call_spread requires k_long < k_short")
@@ -12,14 +12,16 @@ def call_spread(quantity, k_long, k_short, expiry_days, vol_long, vol_short):
             strike=k_long,
             expiry_days=expiry_days,
             option_type="call",
-            volatility=vol_long
+            volatility=vol_long,
+            contract=contract
         ),
         AmericanOption(
             quantity=-quantity,
             strike=k_short,
             expiry_days=expiry_days,
             option_type="call",
-            volatility=vol_short
+            volatility=vol_short,
+            contract=contract
         ),
     ]
 
@@ -29,7 +31,7 @@ def call_spread(quantity, k_long, k_short, expiry_days, vol_long, vol_short):
     )
 
 
-def put_spread(quantity, k_long, k_short, expiry_days, vol_long, vol_short):
+def put_spread(quantity, k_long, k_short, expiry_days, vol_long, vol_short, contract=None):
 
     if k_long <= k_short:
         raise ValueError("put_spread requires k_long > k_short")
@@ -40,14 +42,16 @@ def put_spread(quantity, k_long, k_short, expiry_days, vol_long, vol_short):
             strike=k_long,
             expiry_days=expiry_days,
             option_type="put",
-            volatility=vol_long
+            volatility=vol_long,
+            contract=contract
         ),
         AmericanOption(
             quantity=-quantity,
             strike=k_short,
             expiry_days=expiry_days,
             option_type="put",
-            volatility=vol_short
+            volatility=vol_short,
+            contract=contract
         ),
     ]
 
@@ -57,7 +61,7 @@ def put_spread(quantity, k_long, k_short, expiry_days, vol_long, vol_short):
     )
 
 
-def straddle(quantity, strike, expiry_days, vol_call, vol_put):
+def straddle(quantity, strike, expiry_days, vol_call, vol_put, contract=None):
 
     legs = [
         AmericanOption(
@@ -65,14 +69,16 @@ def straddle(quantity, strike, expiry_days, vol_call, vol_put):
             strike=strike,
             expiry_days=expiry_days,
             option_type="call",
-            volatility=vol_call
+            volatility=vol_call,
+            contract=contract
         ),
         AmericanOption(
             quantity=quantity,
             strike=strike,
             expiry_days=expiry_days,
             option_type="put",
-            volatility=vol_put
+            volatility=vol_put,
+            contract=contract
         ),
     ]
 
@@ -82,7 +88,7 @@ def straddle(quantity, strike, expiry_days, vol_call, vol_put):
     )
 
 
-def strangle(quantity, k_put, k_call, expiry_days, vol_put, vol_call):
+def strangle(quantity, k_put, k_call, expiry_days, vol_put, vol_call, contract=None):
 
     if k_put >= k_call:
         raise ValueError("strangle requires k_put < k_call")
@@ -93,14 +99,16 @@ def strangle(quantity, k_put, k_call, expiry_days, vol_put, vol_call):
             strike=k_put,
             expiry_days=expiry_days,
             option_type="put",
-            volatility=vol_put
+            volatility=vol_put,
+            contract=contract
         ),
         AmericanOption(
             quantity=quantity,
             strike=k_call,
             expiry_days=expiry_days,
             option_type="call",
-            volatility=vol_call
+            volatility=vol_call,
+            contract=contract
         ),
     ]
 
@@ -120,7 +128,8 @@ def butterfly(
     vol1,
     vol2,
     vol3,
-    ratio=(1, 2, 1)
+    ratio=(1, 2, 1),
+    contract=None
 ):
 
     if not (k1 < k2 < k3):
@@ -134,21 +143,24 @@ def butterfly(
             strike=k1,
             expiry_days=expiry_days,
             option_type=option_type,
-            volatility=vol1
+            volatility=vol1,
+            contract=contract
         ),
         AmericanOption(
             quantity=-quantity * r2,
             strike=k2,
             expiry_days=expiry_days,
             option_type=option_type,
-            volatility=vol2
+            volatility=vol2,
+            contract=contract
         ),
         AmericanOption(
             quantity=quantity * r3,
             strike=k3,
             expiry_days=expiry_days,
             option_type=option_type,
-            volatility=vol3
+            volatility=vol3,
+            contract=contract
         ),
     ]
 
@@ -158,7 +170,7 @@ def butterfly(
     )
 
 
-def collar(put_qty, call_qty, k_put, k_call, expiry_days, vol_put, vol_call):
+def collar(put_qty, call_qty, k_put, k_call, expiry_days, vol_put, vol_call, contract=None):
 
     if k_put >= k_call:
         raise ValueError("collar requires k_put < k_call")
@@ -169,14 +181,16 @@ def collar(put_qty, call_qty, k_put, k_call, expiry_days, vol_put, vol_call):
             strike=k_put,
             expiry_days=expiry_days,
             option_type="put",
-            volatility=vol_put
+            volatility=vol_put,
+            contract=contract
         ),
         AmericanOption(
             quantity=call_qty,
             strike=k_call,
             expiry_days=expiry_days,
             option_type="call",
-            volatility=vol_call
+            volatility=vol_call,
+            contract=contract
         ),
     ]
 
@@ -193,7 +207,8 @@ def calendar_spread(
     far_expiry_days,
     option_type,
     vol_near,
-    vol_far
+    vol_far,
+    contract=None
 ):
 
     if near_expiry_days >= far_expiry_days:
@@ -205,14 +220,16 @@ def calendar_spread(
             strike=strike,
             expiry_days=near_expiry_days,
             option_type=option_type,
-            volatility=vol_near
+            volatility=vol_near,
+            contract=contract
         ),
         AmericanOption(
             quantity=quantity,
             strike=strike,
             expiry_days=far_expiry_days,
             option_type=option_type,
-            volatility=vol_far
+            volatility=vol_far,
+            contract=contract
         ),
     ]
 

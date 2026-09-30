@@ -14,6 +14,7 @@ _COLUMN_LETTERS = {
     "strike": "N",
     "contract_year": "O",
     "contract_month": "P",
+    "settlement_price": "V",
     "quantity": "U",
     "vol_pct": "X",
     "maturity": "FC",
@@ -65,10 +66,14 @@ def import_bushel_positions(path):
     Reads a Bushel-style export (CSV) positionally by Excel column letter,
     keeping only Corn/Soybean/SRW Wheat rows (Instrument in C/S/W).
 
+    Each instrument carries its own .contract (e.g. "ZCH26"). Also reads the
+    Settlement Price (column V) for each row, so the caller can populate
+    Market.futures_prices for any newly-seen contract.
+
     Returns a list of (instrument, meta) tuples. meta is a plain dict --
-    {"commodity", "contract", "vol_pct"} -- carried alongside the instrument
-    for display grouping, since Future/AmericanOption don't store which
-    commodity/contract they belong to.
+    {"commodity", "contract", "vol_pct", "settlement_price"} -- vol_pct/
+    settlement_price are display/price-seeding helpers, since Future doesn't
+    store volatility and prices live on Market, not on the instrument.
     """
 
     raw = pd.read_csv(path, header=0)
@@ -95,9 +100,15 @@ def import_bushel_positions(path):
         vol_raw = row.iloc[_COLUMNS["vol_pct"]]
         vol_pct = float(vol_raw) if pd.notna(vol_raw) else None
 
+        price_raw = row.iloc[_COLUMNS["settlement_price"]]
+        settlement_price = float(price_raw) if pd.notna(price_raw) else None
+
         if contract_type == "F":
-            instrument = Future(quantity=quantity)
-            meta = {"commodity": commodity, "contract": contract, "vol_pct": vol_pct}
+            instrument = Future(quantity=quantity, contract=contract)
+            meta = {
+                "commodity": commodity, "contract": contract,
+                "vol_pct": vol_pct, "settlement_price": settlement_price,
+            }
 
         elif contract_type in ("C", "P"):
 
@@ -115,8 +126,12 @@ def import_bushel_positions(path):
                 expiry_days=expiry_days,
                 option_type="call" if contract_type == "C" else "put",
                 volatility=volatility,
+                contract=contract,
             )
-            meta = {"commodity": commodity, "contract": contract, "vol_pct": None}
+            meta = {
+                "commodity": commodity, "contract": contract,
+                "vol_pct": None, "settlement_price": settlement_price,
+            }
 
         else:
             continue

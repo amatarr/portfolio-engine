@@ -14,12 +14,14 @@ from vol_calculator.scenarios import (
 def plot_surface(
     portfolio,
     market,
+    contract=None,
     metric="PnL"
 ):
 
     surface = spot_vol_surface(
         portfolio,
         market,
+        contract=contract,
         metric=metric
     )
 
@@ -34,11 +36,11 @@ def plot_surface(
     )
 
     plt.title(
-        f"{metric} Heatmap\nSpot Move (¢) vs Vol Shift (pts)"
+        f"{metric} Heatmap\nFuture Spot Move (¢) vs Vol Shift (pts) -- {contract or 'single contract'}"
     )
 
     plt.xlabel("Vol Shift (pts)")
-    plt.ylabel("Spot Move (¢)")
+    plt.ylabel("Future Spot Move (¢)")
 
     plt.show()
 
@@ -66,9 +68,9 @@ def plot_strike_map(portfolio, market=None, weight="quantity"):
     plt.show()
 
 
-def plot_stress(portfolio, market, greek, axis, magnitudes):
+def plot_stress(portfolio, market, greek, axis, magnitudes, contract=None):
 
-    table = stress_table(portfolio, market, greek, axis, magnitudes)
+    table = stress_table(portfolio, market, greek, axis, magnitudes, contract)
 
     plt.figure(figsize=(8, 5))
 
@@ -86,6 +88,7 @@ def plot_stress(portfolio, market, greek, axis, magnitudes):
 def plot_stress_report(
     portfolio,
     market,
+    contract=None,
     price_magnitudes=(5, 10, 15, 20),
     time_magnitudes=(5, 10, 15, 20),
     vol_magnitudes=(1, 2, 3, 4)
@@ -94,6 +97,7 @@ def plot_stress_report(
     report = stress_report(
         portfolio,
         market,
+        contract=contract,
         price_magnitudes=price_magnitudes,
         time_magnitudes=time_magnitudes,
         vol_magnitudes=vol_magnitudes
@@ -130,6 +134,7 @@ def plot_payoff(
     portfolio,
     market,
     time_steps,
+    contract=None,
     low=-20,
     high=20,
     step=2,
@@ -140,6 +145,7 @@ def plot_payoff(
         portfolio,
         market,
         time_steps=time_steps,
+        contract=contract,
         low=low,
         high=high,
         step=step
@@ -160,6 +166,7 @@ def plot_payoff(
         expiry = payoff_at_expiry(
             portfolio,
             market,
+            contract=contract,
             low=low,
             high=high,
             step=step
@@ -175,10 +182,10 @@ def plot_payoff(
         )
 
     plt.axhline(0, color="grey", linewidth=0.8)
-    plt.axvline(market.futures_price, color="grey", linewidth=0.8, linestyle=":")
+    plt.axvline(market.price_for(contract), color="grey", linewidth=0.8, linestyle=":")
 
-    plt.title("Payoff Diagram")
-    plt.xlabel("Futures Price")
+    plt.title(f"Payoff Diagram -- {contract or 'single contract'}")
+    plt.xlabel("Future Spot")
     plt.ylabel("PnL")
     plt.legend()
     plt.grid(alpha=0.3)

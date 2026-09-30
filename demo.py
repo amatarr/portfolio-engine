@@ -10,7 +10,7 @@ from vol_calculator import (
 )
 
 market = Market(
-    futures_price=528.75,
+    futures_prices={"ZCH26": 528.75},
     interest_rate=0.038
 )
 

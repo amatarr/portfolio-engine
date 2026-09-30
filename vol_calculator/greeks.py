@@ -11,17 +11,26 @@ SPOT_BUMP = 0.001
 PERCENT = 0.01
 
 
-def shift_portfolio_vols(portfolio, dv):
+def shift_portfolio_vols(portfolio, dv, contract=None):
+    """
+    Shifts vol by dv. If contract is given, only legs on that contract are
+    shifted -- legs on other contracts pass through unchanged. contract=None
+    shifts every leg (back-compat / single-contract books).
+    """
 
     shocked = Portfolio()
 
     for pos in portfolio.positions:
-        shocked.add(pos.shift_vol(dv))
+        if contract is None or pos.contract == contract:
+            shocked.add(pos.shift_vol(dv))
+        else:
+            shocked.add(pos)
 
     return shocked
 
 
 def shift_time(portfolio, days):
+    """Time decay applies to the whole book regardless of contract."""
 
     shocked = Portfolio()
 
@@ -31,18 +40,24 @@ def shift_time(portfolio, days):
     return shocked
 
 
+def _bump_price(market, contract, ds):
+
+    bumped = copy.deepcopy(market)
+    base = bumped.price_for(contract)
+    key = contract if contract is not None else next(iter(bumped.futures_prices))
+    bumped.futures_prices[key] = base + ds
+    return bumped
+
+
 class GreekEngine:
 
     @staticmethod
-    def delta(portfolio, market):
+    def delta(portfolio, market, contract=None):
 
-        ds = market.futures_price * SPOT_BUMP
+        ds = market.price_for(contract) * SPOT_BUMP
 
-        up_market = copy.deepcopy(market)
-        down_market = copy.deepcopy(market)
-
-        up_market.futures_price += ds
-        down_market.futures_price -= ds
+        up_market = _bump_price(market, contract, ds)
+        down_market = _bump_price(market, contract, -ds)
 
         return (
             portfolio.value(up_market)
@@ -50,15 +65,12 @@ class GreekEngine:
         ) / (2 * ds)
 
     @staticmethod
-    def gamma(portfolio, market):
+    def gamma(portfolio, market, contract=None):
 
-        ds = market.futures_price * SPOT_BUMP
+        ds = market.price_for(contract) * SPOT_BUMP
 
-        up_market = copy.deepcopy(market)
-        down_market = copy.deepcopy(market)
-
-        up_market.futures_price += ds
-        down_market.futures_price -= ds
+        up_market = _bump_price(market, contract, ds)
+        down_market = _bump_price(market, contract, -ds)
 
         up_value = portfolio.value(up_market)
         mid_value = portfolio.value(market)
@@ -71,12 +83,12 @@ class GreekEngine:
         ) / (ds ** 2)
 
     @staticmethod
-    def vega(portfolio, market):
+    def vega(portfolio, market, contract=None):
 
         dv = VOL_POINT
 
-        up_portfolio = shift_portfolio_vols(portfolio, dv)
-        down_portfolio = shift_portfolio_vols(portfolio, -dv)
+        up_portfolio = shift_portfolio_vols(portfolio, dv, contract)
+        down_portfolio = shift_portfolio_vols(portfolio, -dv, contract)
 
         up_value = up_portfolio.value(market)
         down_value = down_portfolio.value(market)
@@ -116,19 +128,12 @@ class GreekEngine:
         ) * PERCENT
 
     @staticmethod
-    def volga(portfolio, market):
+    def volga(portfolio, market, contract=None):
 
         dv = VOL_POINT
 
-        up_portfolio = shift_portfolio_vols(
-            portfolio,
-            dv
-        )
-
-        down_portfolio = shift_portfolio_vols(
-            portfolio,
-            -dv
-        )
+        up_portfolio = shift_portfolio_vols(portfolio, dv, contract)
+        down_portfolio = shift_portfolio_vols(portfolio, -dv, contract)
 
         up_value = up_portfolio.value(market)
         mid_value = portfolio.value(market)
@@ -143,25 +148,15 @@ class GreekEngine:
         ) * VOL_POINT
 
     @staticmethod
-    def vanna_vega(portfolio, market):
+    def vanna_vega(portfolio, market, contract=None):
 
-        ds = market.futures_price * SPOT_BUMP
+        ds = market.price_for(contract) * SPOT_BUMP
 
-        up_market = copy.deepcopy(market)
-        down_market = copy.deepcopy(market)
+        up_market = _bump_price(market, contract, ds)
+        down_market = _bump_price(market, contract, -ds)
 
-        up_market.futures_price += ds
-        down_market.futures_price -= ds
-
-        vega_up = GreekEngine.vega(
-            portfolio,
-            up_market
-        )
-
-        vega_down = GreekEngine.vega(
-            portfolio,
-            down_market
-        )
+        vega_up = GreekEngine.vega(portfolio, up_market, contract)
+        vega_down = GreekEngine.vega(portfolio, down_market, contract)
 
         return (
             vega_up
@@ -169,29 +164,15 @@ class GreekEngine:
         ) / (2 * ds)
 
     @staticmethod
-    def vanna_delta(portfolio, market):
+    def vanna_delta(portfolio, market, contract=None):
 
         dv = VOL_POINT
 
-        up_portfolio = shift_portfolio_vols(
-            portfolio,
-            dv
-        )
+        up_portfolio = shift_portfolio_vols(portfolio, dv, contract)
+        down_portfolio = shift_portfolio_vols(portfolio, -dv, contract)
 
-        down_portfolio = shift_portfolio_vols(
-            portfolio,
-            -dv
-        )
-
-        delta_up = GreekEngine.delta(
-            up_portfolio,
-            market
-        )
-
-        delta_down = GreekEngine.delta(
-            down_portfolio,
-            market
-        )
+        delta_up = GreekEngine.delta(up_portfolio, market, contract)
+        delta_down = GreekEngine.delta(down_portfolio, market, contract)
 
         return (
             delta_up
@@ -199,11 +180,12 @@ class GreekEngine:
         ) / (2 * dv)
 
     @staticmethod
-    def summary(portfolio, market):
+    def summary(portfolio, market, contract=None):
 
         report = GreekEngine.report(
             portfolio,
-            market
+            market,
+            contract
         )
 
         for k, v in report.items():
@@ -214,108 +196,61 @@ class GreekEngine:
                 print(f"{k:<25}: {v:.4f}")
 
     @staticmethod
-    def report(portfolio, market):
+    def report(portfolio, market, contract=None):
 
         return {
             "Value": portfolio.value(market),
 
-            "Delta (ΔPnL/pt)": GreekEngine.delta(
-                portfolio,
-                market
-            ),
+            "Delta (ΔPnL/pt)": GreekEngine.delta(portfolio, market, contract),
 
-            "Gamma (ΔDelta/pt)": GreekEngine.gamma(
-                portfolio,
-                market
-            ),
+            "Gamma (ΔDelta/pt)": GreekEngine.gamma(portfolio, market, contract),
 
-            "Vega (ΔPnL/1 vol pt)": GreekEngine.vega(
-                portfolio,
-                market
-            ),
+            "Vega (ΔPnL/1 vol pt)": GreekEngine.vega(portfolio, market, contract),
 
-            "Theta (ΔPnL/day)": GreekEngine.theta(
-                portfolio,
-                market
-            ),
+            "Theta (ΔPnL/day)": GreekEngine.theta(portfolio, market),
 
-            "Rho (ΔPnL/1% rate)": GreekEngine.rho(
-                portfolio,
-                market
-            ),
+            "Rho (ΔPnL/1% rate)": GreekEngine.rho(portfolio, market),
 
-            "Volga (ΔVega/1 vol pt)": GreekEngine.volga(
-                portfolio,
-                market
-            ),
+            "Volga (ΔVega/1 vol pt)": GreekEngine.volga(portfolio, market, contract),
 
-            "Vanna-D (ΔDelta/1 vol pt)": GreekEngine.vanna_delta(
-                portfolio,
-                market
-            ),
+            "Vanna-D (ΔDelta/1 vol pt)": GreekEngine.vanna_delta(portfolio, market, contract),
 
-            "Vanna-V (ΔVega/pt)": GreekEngine.vanna_vega(
-                portfolio,
-                market
-            )
+            "Vanna-V (ΔVega/pt)": GreekEngine.vanna_vega(portfolio, market, contract)
         }
 
     @staticmethod
-    def summary_dollars(portfolio, market):
+    def summary_dollars(portfolio, market, contract=None):
 
         report = GreekEngine.report_dollars(
             portfolio,
-            market
+            market,
+            contract
         )
 
         for k, v in report.items():
             print(f"{k:<28}: {v:,.4f}")
 
     @staticmethod
-    def report_dollars(portfolio, market):
+    def report_dollars(portfolio, market, contract=None):
 
         to_k = market.contract_multiplier / 1000
 
         return {
             "Value ($k)": portfolio.value(market) * to_k,
 
-            "Delta (contracts)": GreekEngine.delta(
-                portfolio,
-                market
-            ),
+            "Delta (contracts)": GreekEngine.delta(portfolio, market, contract),
 
-            "Gamma (ΔDelta contracts/1¢/bu)": GreekEngine.gamma(
-                portfolio,
-                market
-            ),
+            "Gamma (ΔDelta contracts/1¢/bu)": GreekEngine.gamma(portfolio, market, contract),
 
-            "Vega ($k/1% vol move)": GreekEngine.vega(
-                portfolio,
-                market
-            ) * to_k,
+            "Vega ($k/1% vol move)": GreekEngine.vega(portfolio, market, contract) * to_k,
 
-            "Theta ($k/1 day decay)": GreekEngine.theta(
-                portfolio,
-                market
-            ) * to_k,
+            "Theta ($k/1 day decay)": GreekEngine.theta(portfolio, market) * to_k,
 
-            "Rho ($k/1% rate move)": GreekEngine.rho(
-                portfolio,
-                market
-            ) * to_k,
+            "Rho ($k/1% rate move)": GreekEngine.rho(portfolio, market) * to_k,
 
-            "Volga (ΔVega/1 vol pt)": GreekEngine.volga(
-                portfolio,
-                market
-            ),
+            "Volga (ΔVega/1 vol pt)": GreekEngine.volga(portfolio, market, contract),
 
-            "Vanna-D (ΔDelta/1 vol pt)": GreekEngine.vanna_delta(
-                portfolio,
-                market
-            ),
+            "Vanna-D (ΔDelta/1 vol pt)": GreekEngine.vanna_delta(portfolio, market, contract),
 
-            "Vanna-V (ΔVega/pt)": GreekEngine.vanna_vega(
-                portfolio,
-                market
-            )
+            "Vanna-V (ΔVega/pt)": GreekEngine.vanna_vega(portfolio, market, contract)
         }

@@ -115,7 +115,7 @@ _require_password()
 LEG_BUILDERS = {
     "Future": {
         "defaults": {"quantity": -1.0},
-        "build": lambda **kw: Future(quantity=kw["quantity"]),
+        "build": lambda **kw: Future(**kw),
     },
     "American Option": {
         "defaults": {
@@ -259,13 +259,34 @@ def _commodities_present(meta):
     return seen
 
 
+_DEFAULT_CONTRACT = contract_code("Corn", COMMODITIES["Corn"]["months"][0], 2026)
+
+
 def _default_portfolio():
 
     portfolio = Portfolio()
-    portfolio.add(Future(quantity=-1))
-    portfolio.add(AmericanOption(quantity=-5, strike=620, expiry_days=64, option_type="call", volatility=0.26189))
-    portfolio.add(AmericanOption(quantity=2, strike=530, expiry_days=64, option_type="call", volatility=0.2150))
+    portfolio.add(Future(quantity=-1, contract=_DEFAULT_CONTRACT))
+    portfolio.add(AmericanOption(
+        quantity=-5, strike=620, expiry_days=64, option_type="call",
+        volatility=0.26189, contract=_DEFAULT_CONTRACT
+    ))
+    portfolio.add(AmericanOption(
+        quantity=2, strike=530, expiry_days=64, option_type="call",
+        volatility=0.2150, contract=_DEFAULT_CONTRACT
+    ))
     return portfolio
+
+
+def _commodity_from_contract(contract, fallback="Unknown"):
+
+    if not contract:
+        return fallback
+
+    for name, info in COMMODITIES.items():
+        if contract.startswith(info["symbol"]):
+            return name
+
+    return fallback
 
 
 def _download_df_button(df, label, filename):
@@ -275,13 +296,13 @@ def _download_df_button(df, label, filename):
 if "portfolio" not in st.session_state:
     st.session_state.portfolio = _default_portfolio()
     st.session_state.position_meta = [
-        {"commodity": "Corn", "contract": None, "vol_pct": None}
+        {"commodity": "Corn", "contract": _DEFAULT_CONTRACT, "vol_pct": None}
         for _ in st.session_state.portfolio.positions
     ]
 
 if "position_meta" not in st.session_state:
     st.session_state.position_meta = [
-        {"commodity": "Corn", "contract": None, "vol_pct": None}
+        {"commodity": "Corn", "contract": _DEFAULT_CONTRACT, "vol_pct": None}
         for _ in st.session_state.portfolio.positions
     ]
 
@@ -291,7 +312,10 @@ if "market" not in st.session_state:
         _default_rate = _sofr["rate"]
     except Exception:
         _default_rate = 0.038
-    st.session_state.market = Market(futures_price=528.75, interest_rate=_default_rate)
+    st.session_state.market = Market(
+        futures_prices={_DEFAULT_CONTRACT: 528.75},
+        interest_rate=_default_rate
+    )
 
 
 st.title("Vol Calculator")
@@ -330,10 +354,12 @@ with st.container(border=True):
         )
         year = c_year.number_input("Year", value=2026, step=1, format="%d")
 
-        st.caption(f"Contract: {contract_code(commodity, month_code, year)}")
+        current_contract = contract_code(commodity, month_code, year)
+        st.caption(f"Contract: {current_contract}")
 
+        existing_price = st.session_state.market.futures_prices.get(current_contract, 528.75)
         futures_price = st.number_input(
-            "Futures Price", value=float(st.session_state.market.futures_price), step=0.25
+            "Futures Price", value=float(existing_price), step=0.25, key=f"price_{current_contract}"
         )
         st.caption("Manual entry for now -- live Bushel/CQG feed not yet connected.")
 
@@ -356,11 +382,11 @@ with st.container(border=True):
         contract_multiplier = multiplier_for(commodity)
         st.caption(f"Contract Multiplier: ${contract_multiplier:.0f}/pt (auto, {commodity})")
 
-        st.session_state.market = Market(
-            futures_price=futures_price,
-            interest_rate=interest_rate,
-            contract_multiplier=contract_multiplier
-        )
+        # Mutate in place -- a fresh Market() would wipe every other
+        # contract's price, and this book can hold several at once.
+        st.session_state.market.futures_prices[current_contract] = futures_price
+        st.session_state.market.interest_rate = interest_rate
+        st.session_state.market.contract_multiplier = contract_multiplier
 
     with col_add:
         st.subheader("Add Leg")
@@ -381,11 +407,12 @@ with st.container(border=True):
 
         if submitted:
             try:
+                kwargs["contract"] = current_contract
                 instrument = spec["build"](**kwargs)
                 st.session_state.portfolio.add(instrument)
                 st.session_state.position_meta.append({
                     "commodity": commodity,
-                    "contract": contract_code(commodity, month_code, year),
+                    "contract": current_contract,
                     "vol_pct": None,
                 })
                 st.success(f"Added {leg_type}")
@@ -414,8 +441,12 @@ with st.container(border=True):
                         tmp_path = tmp.name
                     st.session_state.portfolio = portfolio_from_csv(tmp_path)
                     st.session_state.position_meta = [
-                        {"commodity": commodity, "contract": None, "vol_pct": None}
-                        for _ in st.session_state.portfolio.positions
+                        {
+                            "commodity": _commodity_from_contract(pos.contract, fallback=commodity),
+                            "contract": pos.contract,
+                            "vol_pct": None,
+                        }
+                        for pos in st.session_state.portfolio.positions
                     ]
                     st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
                     st.rerun()
@@ -451,6 +482,8 @@ with st.container(border=True):
                         for instrument, meta in imported:
                             st.session_state.portfolio.add(instrument)
                             st.session_state.position_meta.append(meta)
+                            if meta.get("settlement_price") is not None:
+                                st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
                         st.success(f"Added {len(imported)} imported position(s)")
                         st.rerun()
                     except Exception as e:
@@ -491,6 +524,23 @@ with st.container(border=True):
                     st.session_state.portfolio.positions.pop(i)
                     st.session_state.position_meta.pop(i)
                 st.rerun()
+
+
+def _contract_selector(key):
+    """
+    The "Future Spot" being analyzed on this tab: only this contract's price
+    (and, where relevant, vol) is shocked -- every other contract's legs are
+    priced at their own current value throughout, so the whole portfolio's
+    P&L is shown, not just one commodity's slice of it.
+    """
+
+    available = sorted(st.session_state.market.futures_prices.keys())
+
+    if not available:
+        st.info("No contract prices set yet -- add a position or set a price in the Market panel.")
+        return None
+
+    return st.selectbox("Future Spot", available, key=key)
 
 
 def _tab_help(text, formulas=None):
@@ -541,19 +591,22 @@ with tabs[0]:
     if not has_positions:
         st.info("Add positions to see Greeks.")
     else:
-        raw = GreekEngine.report(portfolio, market)
-        dollars = GreekEngine.report_dollars(portfolio, market)
+        fs_contract = _contract_selector("fs_greeks")
 
-        col1, col2 = st.columns(2)
-        col1.write("Raw (contracts)")
-        col1.table(pd.Series(raw, name="Value").to_frame())
-        col2.write("$k view")
-        col2.table(pd.Series(dollars, name="Value").to_frame())
+        if fs_contract:
+            raw = GreekEngine.report(portfolio, market, fs_contract)
+            dollars = GreekEngine.report_dollars(portfolio, market, fs_contract)
 
-        st.subheader("By Tenor")
-        tenor_df = report_by_tenor(portfolio, market).round(4)
-        st.dataframe(tenor_df)
-        _download_df_button(tenor_df, "Download tenor report CSV", "report_by_tenor.csv")
+            col1, col2 = st.columns(2)
+            col1.write("Raw (contracts)")
+            col1.table(pd.Series(raw, name="Value").to_frame())
+            col2.write("$k view")
+            col2.table(pd.Series(dollars, name="Value").to_frame())
+
+            st.subheader("By Tenor")
+            tenor_df = report_by_tenor(portfolio, market, fs_contract).round(4)
+            st.dataframe(tenor_df)
+            _download_df_button(tenor_df, "Download tenor report CSV", "report_by_tenor.csv")
 
 with tabs[1]:
 
@@ -563,13 +616,17 @@ with tabs[1]:
         "vol levels (Vol Ladder), so you can see how risk changes before the market actually moves."
     )
 
+    fs_contract = _contract_selector("fs_ladders") if has_positions else None
+
     c1, c2, c3 = st.columns(3)
     spot_low = c1.number_input("Low %", value=-15, step=1, key="spot_low")
     spot_high = c2.number_input("High %", value=15, step=1, key="spot_high")
     spot_step = c3.number_input("Step %", value=3, step=1, key="spot_step")
 
-    if has_positions:
-        ladder = spot_ladder(portfolio, market, low=spot_low, high=spot_high, step=spot_step).round(3)
+    if fs_contract:
+        ladder = spot_ladder(
+            portfolio, market, contract=fs_contract, low=spot_low, high=spot_high, step=spot_step
+        ).round(3)
         st.dataframe(ladder)
         _download_df_button(ladder, "Download spot ladder CSV", "spot_ladder.csv")
 
@@ -580,8 +637,10 @@ with tabs[1]:
     vol_high = c5.number_input("High (pts)", value=10, step=1, key="vol_high")
     vol_step = c6.number_input("Step (pts)", value=2, step=1, key="vol_step")
 
-    if has_positions:
-        vladder = vol_ladder(portfolio, market, low=vol_low, high=vol_high, step=vol_step).round(3)
+    if fs_contract:
+        vladder = vol_ladder(
+            portfolio, market, contract=fs_contract, low=vol_low, high=vol_high, step=vol_step
+        ).round(3)
         st.dataframe(vladder)
         _download_df_button(vladder, "Download vol ladder CSV", "vol_ladder.csv")
 
@@ -593,12 +652,14 @@ with tabs[2]:
         "so combined moves are visible at a glance."
     )
 
+    fs_contract = _contract_selector("fs_surface") if has_positions else None
+
     metric = st.selectbox(
         "Metric", ["PnL", "Delta", "Gamma", "Vega", "Volga", "Vanna-D", "Vanna-V"]
     )
 
-    if has_positions:
-        plot_surface(portfolio, market, metric=metric)
+    if fs_contract:
+        plot_surface(portfolio, market, contract=fs_contract, metric=metric)
         st.pyplot(plt.gcf())
         plt.close()
 
@@ -612,8 +673,10 @@ with tabs[3]:
     )
     st.caption("Delta/Gamma x {price, time, vol}, Vega/Theta x {price, time}")
 
-    if has_positions:
-        plot_stress_report(portfolio, market)
+    fs_contract = _contract_selector("fs_stress") if has_positions else None
+
+    if fs_contract:
+        plot_stress_report(portfolio, market, contract=fs_contract)
         st.pyplot(plt.gcf())
         plt.close()
 
@@ -641,11 +704,13 @@ with tabs[5]:
         "larger steps show the position closer to expiry, keeping remaining time value."
     )
 
+    fs_contract = _contract_selector("fs_payoff") if has_positions else None
+
     time_steps_str = st.text_input("Time steps (days, comma-separated)", "0,30,64")
     time_steps = [int(x.strip()) for x in time_steps_str.split(",") if x.strip()]
 
-    if has_positions and time_steps:
-        plot_payoff(portfolio, market, time_steps=time_steps)
+    if fs_contract and time_steps:
+        plot_payoff(portfolio, market, time_steps=time_steps, contract=fs_contract)
         st.pyplot(plt.gcf())
         plt.close()
 
@@ -666,13 +731,16 @@ with tabs[6]:
 
     if has_positions:
 
-        quad = breakevens_quadratic(portfolio, market)
-        numeric = breakevens_numerical(portfolio, market)
+        fs_contract = _contract_selector("fs_breakevens")
 
-        col1, col2 = st.columns(2)
+        if fs_contract:
+            quad = breakevens_quadratic(portfolio, market, fs_contract)
+            numeric = breakevens_numerical(portfolio, market, fs_contract)
 
-        col1.write("Quadratic (fast, Taylor approx)")
-        col1.json(quad)
+            col1, col2 = st.columns(2)
 
-        col2.write("Numerical (exact, 1-day)")
-        col2.json(numeric)
+            col1.write("Quadratic (fast, Taylor approx)")
+            col1.json(quad)
+
+            col2.write("Numerical (exact, 1-day)")
+            col2.json(numeric)
