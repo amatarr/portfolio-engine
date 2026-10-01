@@ -28,6 +28,7 @@ from vol_calculator import (
     breakevens_numerical,
     plot_surface,
     plot_strike_map,
+    strike_map,
     plot_stress_report,
     plot_payoff,
     portfolio_to_csv,
@@ -259,22 +260,8 @@ def _commodities_present(meta):
     return seen
 
 
-_DEFAULT_CONTRACT = contract_code("Corn", COMMODITIES["Corn"]["months"][0], 2026)
-
-
 def _default_portfolio():
-
-    portfolio = Portfolio()
-    portfolio.add(Future(quantity=-1, contract=_DEFAULT_CONTRACT))
-    portfolio.add(AmericanOption(
-        quantity=-5, strike=620, expiry_days=64, option_type="call",
-        volatility=0.26189, contract=_DEFAULT_CONTRACT
-    ))
-    portfolio.add(AmericanOption(
-        quantity=2, strike=530, expiry_days=64, option_type="call",
-        volatility=0.2150, contract=_DEFAULT_CONTRACT
-    ))
-    return portfolio
+    return Portfolio()
 
 
 def _commodity_from_contract(contract, fallback="Unknown"):
@@ -295,16 +282,9 @@ def _download_df_button(df, label, filename):
 
 if "portfolio" not in st.session_state:
     st.session_state.portfolio = _default_portfolio()
-    st.session_state.position_meta = [
-        {"commodity": "Corn", "contract": _DEFAULT_CONTRACT, "vol_pct": None}
-        for _ in st.session_state.portfolio.positions
-    ]
 
 if "position_meta" not in st.session_state:
-    st.session_state.position_meta = [
-        {"commodity": "Corn", "contract": _DEFAULT_CONTRACT, "vol_pct": None}
-        for _ in st.session_state.portfolio.positions
-    ]
+    st.session_state.position_meta = []
 
 if "market" not in st.session_state:
     try:
@@ -313,7 +293,7 @@ if "market" not in st.session_state:
     except Exception:
         _default_rate = 0.038
     st.session_state.market = Market(
-        futures_prices={_DEFAULT_CONTRACT: 528.75},
+        futures_prices={},
         interest_rate=_default_rate
     )
 
@@ -706,9 +686,13 @@ with tabs[4]:
     weight = st.radio("Weight", ["quantity", "delta"], horizontal=True)
 
     if has_positions:
-        plot_strike_map(portfolio, market=market if weight == "delta" else None, weight=weight)
-        st.pyplot(plt.gcf())
-        plt.close()
+        grid = strike_map(portfolio, market=market if weight == "delta" else None, weight=weight)
+        if grid.empty:
+            st.info("No option legs yet -- Strike Map excludes futures, which have no strike.")
+        else:
+            plot_strike_map(portfolio, market=market if weight == "delta" else None, weight=weight)
+            st.pyplot(plt.gcf())
+            plt.close()
 
 with tabs[5]:
 
