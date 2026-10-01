@@ -575,7 +575,8 @@ with tabs[0]:
         "- **Vega**: $k gained/lost per 1% change in vol.\n"
         "- **Theta**: $k lost per day from time passing.\n"
         "- **Rho**: $k gained/lost per 1% change in interest rates.\n\n"
-        "The left table is raw (contracts); the right is in $k. *By Tenor* splits the same Greeks by expiry.\n\n"
+        "Shown in $k using the contract multiplier (Delta/Gamma stay in contracts/cents). "
+        "*By Tenor* splits the same Greeks by expiry, same $k scale.\n\n"
         "The formulas below are the European Black-76 definitions the model is built on. The tool prices "
         "American options with the Barone-Adesi-Whaley approximation and computes every Greek by bumping "
         "the input and repricing, so the numbers approximate these rather than evaluating them directly.",
@@ -594,14 +595,10 @@ with tabs[0]:
         fs_contract = _contract_selector("fs_greeks")
 
         if fs_contract:
-            raw = GreekEngine.report(portfolio, market, fs_contract)
             dollars = GreekEngine.report_dollars(portfolio, market, fs_contract)
 
-            col1, col2 = st.columns(2)
-            col1.write("Raw (contracts)")
-            col1.table(pd.Series(raw, name="Value").to_frame())
-            col2.write("$k view")
-            col2.table(pd.Series(dollars, name="Value").to_frame())
+            st.write("$k view")
+            st.table(pd.Series(dollars, name="Value").to_frame())
 
             st.subheader("By Tenor")
             tenor_df = report_by_tenor(portfolio, market, fs_contract).round(4)

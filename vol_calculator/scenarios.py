@@ -361,12 +361,14 @@ def payoff_diagram(
 
 def report_by_tenor(portfolio, market, contract=None):
     """
-    GreekEngine.report(), broken out by tenor bucket (each distinct
+    GreekEngine.report_dollars(), broken out by tenor bucket (each distinct
     expiry_days value, plus a separate "Futures" bucket for legs with no
     expiry) with a "Total" row for the whole book. Structures are
     flattened to their individual legs first, so a calendar spread's two
     legs correctly land in two different tenor rows. Delta/Gamma/etc are
-    with respect to `contract`, same as everywhere else.
+    with respect to `contract`, same as everywhere else. Same $k scale as
+    GreekEngine.report_dollars, so it's directly comparable to the main
+    Greek Summary table.
     """
 
     legs = _flatten_positions(portfolio.positions)
@@ -389,12 +391,12 @@ def report_by_tenor(portfolio, market, contract=None):
 
         row_label = label if label == "Futures" else f"{label}d"
 
-        report = GreekEngine.report(buckets[label], market, contract)
+        report = GreekEngine.report_dollars(buckets[label], market, contract)
         report = {"Tenor": row_label, **report}
 
         rows.append(report)
 
-    total = {"Tenor": "Total", **GreekEngine.report(portfolio, market, contract)}
+    total = {"Tenor": "Total", **GreekEngine.report_dollars(portfolio, market, contract)}
     rows.append(total)
 
     return pd.DataFrame(rows).set_index("Tenor")

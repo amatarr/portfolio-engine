@@ -201,9 +201,9 @@ class GreekEngine:
         return {
             "Value": portfolio.value(market),
 
-            "Delta (ΔPnL/pt)": GreekEngine.delta(portfolio, market, contract),
+            "Delta (ΔPnL/¢)": GreekEngine.delta(portfolio, market, contract),
 
-            "Gamma (ΔDelta/pt)": GreekEngine.gamma(portfolio, market, contract),
+            "Gamma (ΔDelta/¢)": GreekEngine.gamma(portfolio, market, contract),
 
             "Vega (ΔPnL/1 vol pt)": GreekEngine.vega(portfolio, market, contract),
 
@@ -215,7 +215,7 @@ class GreekEngine:
 
             "Vanna-D (ΔDelta/1 vol pt)": GreekEngine.vanna_delta(portfolio, market, contract),
 
-            "Vanna-V (ΔVega/pt)": GreekEngine.vanna_vega(portfolio, market, contract)
+            "Vanna-V (ΔVega/¢)": GreekEngine.vanna_vega(portfolio, market, contract)
         }
 
     @staticmethod
@@ -252,5 +252,5 @@ class GreekEngine:
 
             "Vanna-D (ΔDelta/1 vol pt)": GreekEngine.vanna_delta(portfolio, market, contract),
 
-            "Vanna-V (ΔVega/pt)": GreekEngine.vanna_vega(portfolio, market, contract)
+            "Vanna-V (ΔVega/¢)": GreekEngine.vanna_vega(portfolio, market, contract)
         }
