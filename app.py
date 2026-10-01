@@ -69,7 +69,7 @@ st.markdown(
         background-color: #262626; border-color: #000000; color: white;
     }
     .st-key-daily_prop_upload_box {
-        background-color: #fff9c4; border-radius: 8px; padding: 1rem;
+        background-color: #fff9c4; border-radius: 8px; padding: 0.5rem 0.75rem;
     }
     </style>
     """,
@@ -404,78 +404,74 @@ with st.container(border=True):
 
         st.subheader("Manage")
 
-        mc_clear, mc_upload, mc_load, mc_download = st.columns([1, 2, 1, 1.4])
+        mc_manage, mc_import = st.columns([1.6, 1.4])
 
-        with mc_clear:
+        with mc_manage:
             with st.container(key="clear_btn"):
                 if st.button("Clear Portfolio"):
                     st.session_state.portfolio = Portfolio()
                     st.session_state.position_meta = []
                     st.rerun()
 
-        with mc_upload:
             uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
 
-        with mc_load:
-            with st.container(key="file_btn_load"):
-                if uploaded is not None and st.button("Load uploaded CSV"):
-                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                        tmp.write(uploaded.getvalue())
-                        tmp_path = tmp.name
-                    st.session_state.portfolio = portfolio_from_csv(tmp_path)
-                    st.session_state.position_meta = [
-                        {
-                            "commodity": _commodity_from_contract(pos.contract, fallback=commodity),
-                            "contract": pos.contract,
-                            "vol_pct": None,
-                        }
-                        for pos in st.session_state.portfolio.positions
-                    ]
-                    st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
-                    st.rerun()
+            mc_load, mc_download = st.columns(2)
 
-        with mc_download:
-            with st.container(key="file_btn_download"):
-                if st.session_state.portfolio.positions:
-                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                        portfolio_to_csv(st.session_state.portfolio, tmp.name)
-                        with open(tmp.name, "rb") as f:
-                            csv_bytes = f.read()
-                    st.download_button(
-                        "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
-                    )
-
-    st.divider()
-
-    with st.container(key="daily_prop_upload_box", border=True):
-
-        st.subheader("Daily_Prop_upload")
-        st.caption("Bushel-style export -- adds to your current positions, doesn't replace them.")
-
-        mc_import_up, mc_import_btn = st.columns([2, 1.4])
-
-        with mc_import_up:
-            imported_file = st.file_uploader(
-                "Upload positions file", type="csv", key="bushel_uploader", label_visibility="collapsed"
-            )
-
-        with mc_import_btn:
-            with st.container(key="file_btn_import"):
-                if imported_file is not None and st.button("Add Imported Positions"):
-                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                        tmp.write(imported_file.getvalue())
-                        tmp_path = tmp.name
-                    try:
-                        imported = import_bushel_positions(tmp_path)
-                        for instrument, meta in imported:
-                            st.session_state.portfolio.add(instrument)
-                            st.session_state.position_meta.append(meta)
-                            if meta.get("settlement_price") is not None:
-                                st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
-                        st.success(f"Added {len(imported)} imported position(s)")
+            with mc_load:
+                with st.container(key="file_btn_load"):
+                    if uploaded is not None and st.button("Load uploaded CSV"):
+                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                            tmp.write(uploaded.getvalue())
+                            tmp_path = tmp.name
+                        st.session_state.portfolio = portfolio_from_csv(tmp_path)
+                        st.session_state.position_meta = [
+                            {
+                                "commodity": _commodity_from_contract(pos.contract, fallback=commodity),
+                                "contract": pos.contract,
+                                "vol_pct": None,
+                            }
+                            for pos in st.session_state.portfolio.positions
+                        ]
+                        st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Import failed: {e}")
+
+            with mc_download:
+                with st.container(key="file_btn_download"):
+                    if st.session_state.portfolio.positions:
+                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                            portfolio_to_csv(st.session_state.portfolio, tmp.name)
+                            with open(tmp.name, "rb") as f:
+                                csv_bytes = f.read()
+                        st.download_button(
+                            "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
+                        )
+
+        with mc_import:
+            with st.container(key="daily_prop_upload_box", border=True):
+
+                st.markdown("**Daily_Prop_upload**")
+                st.caption("Bushel export -- adds to current positions.")
+
+                imported_file = st.file_uploader(
+                    "Upload positions file", type="csv", key="bushel_uploader", label_visibility="collapsed"
+                )
+
+                with st.container(key="file_btn_import"):
+                    if imported_file is not None and st.button("Add Imported Positions"):
+                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                            tmp.write(imported_file.getvalue())
+                            tmp_path = tmp.name
+                        try:
+                            imported = import_bushel_positions(tmp_path)
+                            for instrument, meta in imported:
+                                st.session_state.portfolio.add(instrument)
+                                st.session_state.position_meta.append(meta)
+                                if meta.get("settlement_price") is not None:
+                                    st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
+                            st.success(f"Added {len(imported)} imported position(s)")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Import failed: {e}")
 
     st.divider()
     st.subheader("Current Positions")
