@@ -526,18 +526,35 @@ with st.container(border=True):
                 st.rerun()
 
 
+def _contracts_in_portfolio(portfolio):
+
+    contracts = []
+
+    for pos in portfolio.positions:
+        c = pos.contract
+        if c and c not in contracts:
+            contracts.append(c)
+
+    return sorted(contracts)
+
+
 def _contract_selector(key):
     """
     The "Future Spot" being analyzed on this tab: only this contract's price
     (and, where relevant, vol) is shocked -- every other contract's legs are
     priced at their own current value throughout, so the whole portfolio's
     P&L is shown, not just one commodity's slice of it.
+
+    Options come from the contracts actually present in the portfolio, not
+    from market.futures_prices -- that dict can hold leftover entries (e.g.
+    from a contract you cleared out of the book or just browsed past in the
+    Market panel) that would otherwise show up as selectable here.
     """
 
-    available = sorted(st.session_state.market.futures_prices.keys())
+    available = _contracts_in_portfolio(st.session_state.portfolio)
 
     if not available:
-        st.info("No contract prices set yet -- add a position or set a price in the Market panel.")
+        st.info("No contract found in the current positions.")
         return None
 
     return st.selectbox("Future Spot", available, key=key)
