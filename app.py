@@ -68,6 +68,9 @@ st.markdown(
     .st-key-file_btn_load button:hover, .st-key-file_btn_download button:hover, .st-key-file_btn_import button:hover {
         background-color: #262626; border-color: #000000; color: white;
     }
+    .st-key-daily_prop_upload_box {
+        background-color: #fff9c4; border-radius: 8px; padding: 1rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -442,7 +445,12 @@ with st.container(border=True):
                         "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
                     )
 
-        st.caption("Import Positions File (Bushel-style export, keeps existing positions)")
+    st.divider()
+
+    with st.container(key="daily_prop_upload_box", border=True):
+
+        st.subheader("Daily_Prop_upload")
+        st.caption("Bushel-style export -- adds to your current positions, doesn't replace them.")
 
         mc_import_up, mc_import_btn = st.columns([2, 1.4])
 
