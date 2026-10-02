@@ -363,7 +363,6 @@ with st.container(border=True):
             st.caption("SOFR unavailable -- using manually entered rate.")
 
         contract_multiplier = multiplier_for(commodity)
-        st.caption(f"Contract Multiplier: ${contract_multiplier:.0f}/pt (auto, {commodity})")
 
         # Mutate in place -- a fresh Market() would wipe every other
         # contract's price, and this book can hold several at once.
