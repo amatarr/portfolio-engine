@@ -39,6 +39,7 @@ from vol_calculator import (
     contract_code,
     multiplier_for,
     import_bushel_positions,
+    import_cqg_quotes,
 )
 
 st.set_page_config(page_title="Vol Calculator", layout="wide")
@@ -70,6 +71,15 @@ st.markdown(
     }
     .st-key-daily_prop_upload_box {
         background-color: #fff9c4; border-radius: 8px; padding: 0.5rem 0.75rem;
+    }
+    .st-key-cqg_quotes_box {
+        background-color: #cfe8fc; border-radius: 8px; padding: 0.5rem 0.75rem;
+    }
+    .st-key-file_btn_quotes button {
+        background-color: #000000; color: white; border-color: #000000;
+    }
+    .st-key-file_btn_quotes button:hover {
+        background-color: #262626; border-color: #000000; color: white;
     }
     </style>
     """,
@@ -289,6 +299,9 @@ if "portfolio" not in st.session_state:
 if "position_meta" not in st.session_state:
     st.session_state.position_meta = []
 
+if "last_quotes" not in st.session_state:
+    st.session_state.last_quotes = []
+
 if "market" not in st.session_state:
     try:
         _sofr = _cached_sofr()
@@ -471,6 +484,40 @@ with st.container(border=True):
                             st.rerun()
                         except Exception as e:
                             st.error(f"Import failed: {e}")
+
+    st.divider()
+
+    with st.container(key="cqg_quotes_box", border=True):
+
+        st.markdown("**Live Quotes (CQGXL)**")
+        st.caption("Upload the CQG Links Sheet export -- refreshes Market prices for the contracts it lists.")
+
+        quotes_file = st.file_uploader(
+            "Upload quotes file", type="xlsx", key="cqg_quotes_uploader", label_visibility="collapsed"
+        )
+
+        with st.container(key="file_btn_quotes"):
+            if quotes_file is not None and st.button("Load Quotes"):
+                with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+                    tmp.write(quotes_file.getvalue())
+                    tmp_path = tmp.name
+                try:
+                    quotes = import_cqg_quotes(tmp_path)
+                    if not quotes:
+                        st.warning("No quotes found in this file.")
+                    else:
+                        for q in quotes:
+                            st.session_state.market.futures_prices[q["contract"]] = q["price"]
+                        st.session_state.last_quotes = quotes
+                        st.success(f"Loaded {len(quotes)} quote(s)")
+                except Exception as e:
+                    st.error(f"Import failed: {e}")
+
+        if st.session_state.last_quotes:
+            quotes_df = pd.DataFrame(st.session_state.last_quotes).rename(
+                columns={"commodity": "Commodity", "contract": "Contract", "price": "Price"}
+            )
+            st.dataframe(quotes_df, hide_index=True, width="stretch")
 
     st.divider()
     st.subheader("Current Positions")

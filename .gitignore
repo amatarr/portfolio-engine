@@ -14,6 +14,9 @@ dist/
 # Copyrighted reference material -- do not commit
 Options, Futures, and Other Derivatives*.pdf
 
+# Live CQG-sourced market data -- licensing/redistribution risk, not code
+CQG LINKS SHEET_*.xlsx
+
 # Deliverable exports (charts, generated docs) -- not project code
 powerpoint/
 

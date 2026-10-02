@@ -34,6 +34,7 @@ from vol_calculator.io import portfolio_to_csv, portfolio_from_csv, export_repor
 from vol_calculator.rates import fetch_latest_sofr
 from vol_calculator.contracts import COMMODITIES, MONTH_CODES, contract_code, multiplier_for
 from vol_calculator.bushel_import import import_bushel_positions
+from vol_calculator.cqg_quotes import import_cqg_quotes
 from vol_calculator.structures import (
     call_spread,
     put_spread,
@@ -84,6 +85,7 @@ __all__ = [
     "contract_code",
     "multiplier_for",
     "import_bushel_positions",
+    "import_cqg_quotes",
     "call_spread",
     "put_spread",
     "straddle",
