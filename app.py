@@ -75,12 +75,6 @@ st.markdown(
     .st-key-cqg_quotes_box {
         background-color: #cfe8fc; border-radius: 8px; padding: 0.5rem 0.75rem;
     }
-    .st-key-file_btn_quotes button {
-        background-color: #000000; color: white; border-color: #000000;
-    }
-    .st-key-file_btn_quotes button:hover {
-        background-color: #262626; border-color: #000000; color: white;
-    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -90,6 +84,22 @@ st.markdown(
 @st.cache_data(ttl=4 * 60 * 60)
 def _cached_sofr():
     return fetch_latest_sofr()
+
+
+_CQG_QUOTES_PATH = "CQG LINKS SHEET_.xlsx"
+
+
+def _load_live_quotes():
+    """
+    Reads the CQGXL export fresh on every rerun (no caching) so prices
+    stay live as the sheet updates -- only works when the file is present
+    next to app.py, i.e. running locally with CQGXL writing to it.
+    """
+
+    try:
+        return import_cqg_quotes(_CQG_QUOTES_PATH)
+    except FileNotFoundError:
+        return []
 
 
 def _require_password():
@@ -299,9 +309,6 @@ if "portfolio" not in st.session_state:
 if "position_meta" not in st.session_state:
     st.session_state.position_meta = []
 
-if "last_quotes" not in st.session_state:
-    st.session_state.last_quotes = []
-
 if "market" not in st.session_state:
     try:
         _sofr = _cached_sofr()
@@ -340,6 +347,22 @@ with st.container(border=True):
     with col_market:
         st.subheader("Market")
 
+        with st.container(key="cqg_quotes_box", border=True):
+            st.markdown("**Live Quotes (CQGXL)**")
+
+            live_quotes = _load_live_quotes()
+
+            if live_quotes:
+                for q in live_quotes:
+                    st.session_state.market.futures_prices[q["contract"]] = q["price"]
+
+                quotes_df = pd.DataFrame(live_quotes).rename(
+                    columns={"commodity": "Commodity", "contract": "Contract", "price": "Price"}
+                )
+                st.dataframe(quotes_df, hide_index=True, width="stretch")
+            else:
+                st.caption("Live quotes file not found -- using manual entry below.")
+
         commodity = st.selectbox("Underlying", list(COMMODITIES.keys()))
         available_months = COMMODITIES[commodity]["months"]
 
@@ -353,11 +376,17 @@ with st.container(border=True):
         current_contract = contract_code(commodity, month_code, year)
         st.caption(f"Contract: {current_contract}")
 
-        existing_price = st.session_state.market.futures_prices.get(current_contract, 528.75)
-        futures_price = st.number_input(
-            "Futures Price", value=float(existing_price), step=0.25, key=f"price_{current_contract}"
-        )
-        st.caption("Manual entry for now -- live Bushel/CQG feed not yet connected.")
+        quote_lookup = {q["contract"]: q["price"] for q in live_quotes}
+
+        if current_contract in quote_lookup:
+            futures_price = quote_lookup[current_contract]
+            st.caption(f"Futures Price: {futures_price:.2f} (live, CQGXL)")
+        else:
+            existing_price = st.session_state.market.futures_prices.get(current_contract, 528.75)
+            futures_price = st.number_input(
+                "Futures Price", value=float(existing_price), step=0.25, key=f"price_{current_contract}"
+            )
+            st.caption("No live quote for this contract -- manual entry.")
 
         interest_rate_pct = st.number_input(
             "Interest Rate (%)", value=float(st.session_state.market.interest_rate) * 100,
@@ -484,40 +513,6 @@ with st.container(border=True):
                             st.rerun()
                         except Exception as e:
                             st.error(f"Import failed: {e}")
-
-    st.divider()
-
-    with st.container(key="cqg_quotes_box", border=True):
-
-        st.markdown("**Live Quotes (CQGXL)**")
-        st.caption("Upload the CQG Links Sheet export -- refreshes Market prices for the contracts it lists.")
-
-        quotes_file = st.file_uploader(
-            "Upload quotes file", type="xlsx", key="cqg_quotes_uploader", label_visibility="collapsed"
-        )
-
-        with st.container(key="file_btn_quotes"):
-            if quotes_file is not None and st.button("Load Quotes"):
-                with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-                    tmp.write(quotes_file.getvalue())
-                    tmp_path = tmp.name
-                try:
-                    quotes = import_cqg_quotes(tmp_path)
-                    if not quotes:
-                        st.warning("No quotes found in this file.")
-                    else:
-                        for q in quotes:
-                            st.session_state.market.futures_prices[q["contract"]] = q["price"]
-                        st.session_state.last_quotes = quotes
-                        st.success(f"Loaded {len(quotes)} quote(s)")
-                except Exception as e:
-                    st.error(f"Import failed: {e}")
-
-        if st.session_state.last_quotes:
-            quotes_df = pd.DataFrame(st.session_state.last_quotes).rename(
-                columns={"commodity": "Commodity", "contract": "Contract", "price": "Price"}
-            )
-            st.dataframe(quotes_df, hide_index=True, width="stretch")
 
     st.divider()
     st.subheader("Current Positions")
