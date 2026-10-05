@@ -372,11 +372,15 @@ with st.container(border=True):
                         continue
                     st.markdown(f"**{comm.upper()}**")
                     for code in codes:
+                        col_label, col_price = st.columns([1, 1])
+                        col_label.markdown(code)
+
                         default_price = st.session_state.market.futures_prices.get(
                             code, quote_price_lookup.get(code, 528.75)
                         )
-                        price = st.number_input(
-                            code, value=float(default_price), step=0.25, key=f"price_{code}"
+                        price = col_price.number_input(
+                            code, value=float(default_price), step=0.25,
+                            key=f"price_{code}", label_visibility="collapsed",
                         )
                         st.session_state.market.futures_prices[code] = price
 
@@ -399,23 +403,23 @@ with st.container(border=True):
     with col_add:
         st.subheader("Add Leg")
 
-        leg_type = st.selectbox("Type", list(LEG_BUILDERS.keys()))
-        spec = LEG_BUILDERS[leg_type]
-
         all_contracts = [c for codes in contracts_by_commodity.values() for c in codes]
 
+        col_type, col_contract = st.columns([1, 1])
+
+        leg_type = col_type.selectbox("Type", list(LEG_BUILDERS.keys()))
+        spec = LEG_BUILDERS[leg_type]
+
         if not all_contracts:
-            st.warning("No contracts available yet -- set a price for one in Market above first.")
+            col_contract.warning("No contracts available -- set a price in Market above first.")
             current_contract = None
             auto_expiry = None
         else:
-            current_contract = st.selectbox(
+            current_contract = col_contract.selectbox(
                 "Contract", all_contracts,
                 format_func=lambda c: f"{_commodity_from_contract(c)} -- {c}",
             )
             auto_expiry = approx_option_expiry_days(current_contract)
-            if auto_expiry is not None:
-                st.caption(f"Expiry auto-set from contract: ~{auto_expiry}d (approx)")
 
         with st.form(f"add_{leg_type}"):
 
@@ -424,7 +428,7 @@ with st.container(border=True):
             kwargs = {}
             for col, (field, default) in zip(field_cols, spec["defaults"].items()):
                 if field == "expiry_days" and auto_expiry is not None:
-                    col.caption(f"expiry_days\n~{auto_expiry}d (auto)")
+                    col.number_input(field, value=auto_expiry, disabled=True)
                     kwargs[field] = auto_expiry
                 else:
                     kwargs[field] = _render_field(col, field, default)
