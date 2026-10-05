@@ -35,6 +35,7 @@ from vol_calculator.rates import fetch_latest_sofr
 from vol_calculator.contracts import COMMODITIES, MONTH_CODES, contract_code, multiplier_for
 from vol_calculator.bushel_import import import_bushel_positions
 from vol_calculator.cqg_quotes import import_cqg_quotes
+from vol_calculator.gist_quotes import fetch_gist_quotes
 from vol_calculator.structures import (
     call_spread,
     put_spread,
@@ -86,6 +87,7 @@ __all__ = [
     "multiplier_for",
     "import_bushel_positions",
     "import_cqg_quotes",
+    "fetch_gist_quotes",
     "call_spread",
     "put_spread",
     "straddle",

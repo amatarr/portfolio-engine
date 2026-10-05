@@ -41,6 +41,7 @@ from vol_calculator import (
     multiplier_for,
     import_bushel_positions,
     import_cqg_quotes,
+    fetch_gist_quotes,
 )
 
 st.set_page_config(page_title="Vol Calculator", layout="wide")
@@ -90,17 +91,34 @@ def _cached_sofr():
 _CQG_QUOTES_PATH = "CQG LINKS SHEET_.xlsx"
 
 
+@st.cache_data(ttl=15)
+def _cached_gist_quotes(gist_id):
+    return fetch_gist_quotes(gist_id)
+
+
 def _load_live_quotes():
     """
-    Reads the CQGXL export fresh on every rerun (no caching) so prices
-    stay live as the sheet updates -- only works when the file is present
-    next to app.py, i.e. running locally with CQGXL writing to it.
+    Prefers reading the CQGXL export directly off disk, fresh on every
+    rerun -- only present when running locally with CQGXL writing to it.
+    Falls back to the GitHub Gist that push_quotes.py keeps updated, so
+    the deployed app (which can't see this machine's filesystem) still
+    gets live-ish prices as long as that script is running somewhere.
     """
 
     try:
         return import_cqg_quotes(_CQG_QUOTES_PATH)
     except FileNotFoundError:
-        return []
+        pass
+
+    gist_id = st.secrets.get("gist_id")
+
+    if gist_id:
+        try:
+            return _cached_gist_quotes(gist_id)
+        except Exception:
+            return []
+
+    return []
 
 
 # Free, no-key placeholder source while CQG API access gets sorted out --
@@ -376,18 +394,20 @@ with st.container(border=True):
         st.subheader("Market")
 
         with st.container(key="cqg_quotes_box", border=True):
-            st.markdown("**Live Quotes (CME via Yahoo -- preview)**")
-            st.caption("Placeholder source while CQG API access is pending. Delayed ~15-20min, front-month only.")
+            st.markdown("**Live Quotes (CQGXL)**")
 
-            live_quotes = _load_cme_quotes()
+            live_quotes = _load_live_quotes()
 
             if live_quotes:
+                for q in live_quotes:
+                    st.session_state.market.futures_prices[q["contract"]] = q["price"]
+
                 quotes_df = pd.DataFrame(live_quotes).rename(
                     columns={"commodity": "Commodity", "contract": "Contract", "price": "Price"}
                 )
                 st.dataframe(quotes_df, hide_index=True, width="stretch")
             else:
-                st.caption("Live quotes unavailable right now -- using manual entry below.")
+                st.caption("Live quotes file not found -- using manual entry below.")
 
         commodity = st.selectbox("Underlying", list(COMMODITIES.keys()))
         available_months = COMMODITIES[commodity]["months"]
