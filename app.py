@@ -377,10 +377,10 @@ with st.container(border=True):
                 contracts_by_commodity[comm].append(code)
 
         with st.container(key="cqg_quotes_box", border=True):
-            st.markdown("**Live Quotes (CQGXL)**")
+            st.markdown("**Quotes**")
 
             if not any(contracts_by_commodity.values()):
-                st.caption("No contracts yet -- load Live Quotes, or add a leg below to start one.")
+                st.caption("No contracts yet -- load Quotes, or add a leg below to start one.")
             else:
                 for comm, codes in contracts_by_commodity.items():
                     if not codes:
