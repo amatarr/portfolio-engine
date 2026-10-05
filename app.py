@@ -309,6 +309,18 @@ if "portfolio" not in st.session_state:
 if "position_meta" not in st.session_state:
     st.session_state.position_meta = []
 
+# Starting point for the deployed site, which has no CQGXL file to read --
+# snapshot of the contracts/prices from the local sheet, editable afterward.
+# Not "live," just a seed so the table isn't empty on first load.
+_SEED_FUTURES_PRICES = {
+    "ZCZ26": 500.75, "ZCH27": 515.75, "ZCK27": 522.75,
+    "ZCN27": 527.25, "ZCU27": 510.25, "ZCZ27": 519.75,
+    "ZSX26": 1291.25, "ZSF27": 1308.0, "ZSH27": 1317.75,
+    "ZSK27": 1327.0, "ZSN27": 1333.75, "ZSQ27": 1316.25,
+    "ZWZ26": 696.25, "ZWH27": 709.5, "ZWK27": 715.5,
+    "ZWN27": 716.0, "ZWU27": 721.0, "ZWZ27": 728.5,
+}
+
 if "market" not in st.session_state:
     try:
         _sofr = _cached_sofr()
@@ -316,7 +328,7 @@ if "market" not in st.session_state:
     except Exception:
         _default_rate = 0.038
     st.session_state.market = Market(
-        futures_prices={},
+        futures_prices=dict(_SEED_FUTURES_PRICES),
         interest_rate=_default_rate
     )
 
