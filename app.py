@@ -35,6 +35,8 @@ from vol_calculator import (
     portfolio_from_csv,
     fetch_latest_sofr,
     COMMODITIES,
+    MONTH_CODES,
+    contract_code,
     approx_option_expiry_days,
     import_bushel_positions,
     import_cqg_quotes,
@@ -383,6 +385,29 @@ with st.container(border=True):
                             key=f"price_{code}", label_visibility="collapsed",
                         )
                         st.session_state.market.futures_prices[code] = price
+
+            with st.expander("Add contract manually"):
+                mc_comm, mc_month, mc_year, mc_price = st.columns([1.3, 1, 0.8, 1])
+
+                manual_commodity = mc_comm.selectbox(
+                    "Commodity", list(COMMODITIES.keys()), key="manual_commodity"
+                )
+                manual_months = COMMODITIES[manual_commodity]["months"]
+                manual_month = mc_month.selectbox(
+                    "Month", manual_months,
+                    format_func=lambda m: f"{m} ({MONTH_CODES[m]})", key="manual_month",
+                )
+                manual_year = mc_year.number_input(
+                    "Year", value=2026, step=1, format="%d", key="manual_year"
+                )
+                manual_price = mc_price.number_input(
+                    "Price", value=528.75, step=0.25, key="manual_price"
+                )
+
+                if st.button("Add Contract"):
+                    new_code = contract_code(manual_commodity, manual_month, manual_year)
+                    st.session_state.market.futures_prices[new_code] = manual_price
+                    st.rerun()
 
         interest_rate_pct = st.number_input(
             "Interest Rate (%)", value=float(st.session_state.market.interest_rate) * 100,
