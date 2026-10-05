@@ -6,4 +6,3 @@ scipy
 streamlit
 requests
 openpyxl
-yfinance

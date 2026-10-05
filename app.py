@@ -6,7 +6,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
-import yfinance as yf
 
 from vol_calculator import (
     Market,
@@ -39,7 +38,6 @@ from vol_calculator import (
     approx_option_expiry_days,
     import_bushel_positions,
     import_cqg_quotes,
-    fetch_gist_quotes,
 )
 
 st.set_page_config(page_title="Vol Calculator", layout="wide")
@@ -89,61 +87,16 @@ def _cached_sofr():
 _CQG_QUOTES_PATH = "CQG LINKS SHEET_.xlsx"
 
 
-@st.cache_data(ttl=15)
-def _cached_gist_quotes(gist_id):
-    return fetch_gist_quotes(gist_id)
-
-
 def _load_live_quotes():
     """
-    Prefers reading the CQGXL export directly off disk, fresh on every
-    rerun -- only present when running locally with CQGXL writing to it.
-    Falls back to the GitHub Gist that push_quotes.py keeps updated, so
-    the deployed app (which can't see this machine's filesystem) still
-    gets live-ish prices as long as that script is running somewhere.
+    Reads the CQGXL export fresh on every rerun -- only present when
+    running locally with CQGXL writing to it.
     """
 
     try:
         return import_cqg_quotes(_CQG_QUOTES_PATH)
     except FileNotFoundError:
-        pass
-
-    gist_id = st.secrets.get("gist_id")
-
-    if gist_id:
-        try:
-            return _cached_gist_quotes(gist_id)
-        except Exception:
-            return []
-
-    return []
-
-
-# Free, no-key placeholder source while CQG API access gets sorted out --
-# continuous front-month quotes, delayed ~15-20min, not tied to a specific
-# deferred contract month.
-_CME_YF_TICKERS = {"Corn": "ZC=F", "Soybean": "ZS=F", "SRW Wheat": "ZW=F"}
-
-
-@st.cache_data(ttl=30)
-def _load_cme_quotes():
-
-    quotes = []
-
-    for commodity, ticker in _CME_YF_TICKERS.items():
-        try:
-            price = yf.Ticker(ticker).fast_info.get("lastPrice")
-        except Exception:
-            price = None
-
-        if price is not None:
-            quotes.append({
-                "commodity": commodity,
-                "contract": f"{ticker} (front month)",
-                "price": float(price),
-            })
-
-    return quotes
+        return []
 
 
 def _require_password():
