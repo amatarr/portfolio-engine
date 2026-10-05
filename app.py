@@ -36,9 +36,7 @@ from vol_calculator import (
     portfolio_from_csv,
     fetch_latest_sofr,
     COMMODITIES,
-    MONTH_CODES,
-    contract_code,
-    multiplier_for,
+    approx_option_expiry_days,
     import_bushel_positions,
     import_cqg_quotes,
     fetch_gist_quotes,
@@ -393,52 +391,47 @@ with st.container(border=True):
     with col_market:
         st.subheader("Market")
 
+        live_quotes = _load_live_quotes()
+        quote_price_lookup = {q["contract"]: q["price"] for q in live_quotes}
+
+        # Group known contracts by commodity -- live quotes first, then any
+        # contract already tracked in Market that the live feed doesn't cover
+        # (e.g. manually added earlier), so it doesn't silently disappear.
+        contracts_by_commodity = {name: [] for name in COMMODITIES.keys()}
+
+        for q in live_quotes:
+            if q["commodity"] in contracts_by_commodity:
+                contracts_by_commodity[q["commodity"]].append(q["contract"])
+
+        for code in st.session_state.market.futures_prices.keys():
+            comm = _commodity_from_contract(code, fallback=None)
+            if comm in contracts_by_commodity and code not in contracts_by_commodity[comm]:
+                contracts_by_commodity[comm].append(code)
+
         with st.container(key="cqg_quotes_box", border=True):
             st.markdown("**Live Quotes (CQGXL)**")
 
-            live_quotes = _load_live_quotes()
-
-            if live_quotes:
-                for q in live_quotes:
-                    st.session_state.market.futures_prices[q["contract"]] = q["price"]
-
-                quotes_df = pd.DataFrame(live_quotes).rename(
-                    columns={"commodity": "Commodity", "contract": "Contract", "price": "Price"}
-                )
-                st.dataframe(quotes_df, hide_index=True, width="stretch")
+            if not any(contracts_by_commodity.values()):
+                st.caption("No contracts yet -- load Live Quotes, or add a leg below to start one.")
             else:
-                st.caption("Live quotes file not found -- using manual entry below.")
-
-        commodity = st.selectbox("Underlying", list(COMMODITIES.keys()))
-        available_months = COMMODITIES[commodity]["months"]
-
-        c_month, c_year = st.columns(2)
-        month_code = c_month.selectbox(
-            "Month", available_months,
-            format_func=lambda m: f"{m} ({MONTH_CODES[m]})",
-        )
-        year = c_year.number_input("Year", value=2026, step=1, format="%d")
-
-        current_contract = contract_code(commodity, month_code, year)
-        st.caption(f"Contract: {current_contract}")
-
-        quote_lookup = {q["contract"]: q["price"] for q in live_quotes}
-
-        if current_contract in quote_lookup:
-            futures_price = quote_lookup[current_contract]
-            st.caption(f"Futures Price: {futures_price:.2f} (live quote)")
-        else:
-            existing_price = st.session_state.market.futures_prices.get(current_contract, 528.75)
-            futures_price = st.number_input(
-                "Futures Price", value=float(existing_price), step=0.25, key=f"price_{current_contract}"
-            )
-            st.caption("No live quote for this contract -- manual entry.")
+                for comm, codes in contracts_by_commodity.items():
+                    if not codes:
+                        continue
+                    st.markdown(f"**{comm.upper()}**")
+                    for code in codes:
+                        default_price = st.session_state.market.futures_prices.get(
+                            code, quote_price_lookup.get(code, 528.75)
+                        )
+                        price = st.number_input(
+                            code, value=float(default_price), step=0.25, key=f"price_{code}"
+                        )
+                        st.session_state.market.futures_prices[code] = price
 
         interest_rate_pct = st.number_input(
             "Interest Rate (%)", value=float(st.session_state.market.interest_rate) * 100,
             step=0.01, format="%.2f",
         )
-        interest_rate = interest_rate_pct / 100
+        st.session_state.market.interest_rate = interest_rate_pct / 100
 
         try:
             _sofr = _cached_sofr()
@@ -450,19 +443,26 @@ with st.container(border=True):
         except Exception:
             st.caption("SOFR unavailable -- using manually entered rate.")
 
-        contract_multiplier = multiplier_for(commodity)
-
-        # Mutate in place -- a fresh Market() would wipe every other
-        # contract's price, and this book can hold several at once.
-        st.session_state.market.futures_prices[current_contract] = futures_price
-        st.session_state.market.interest_rate = interest_rate
-        st.session_state.market.contract_multiplier = contract_multiplier
-
     with col_add:
         st.subheader("Add Leg")
 
         leg_type = st.selectbox("Type", list(LEG_BUILDERS.keys()))
         spec = LEG_BUILDERS[leg_type]
+
+        all_contracts = [c for codes in contracts_by_commodity.values() for c in codes]
+
+        if not all_contracts:
+            st.warning("No contracts available yet -- set a price for one in Market above first.")
+            current_contract = None
+            auto_expiry = None
+        else:
+            current_contract = st.selectbox(
+                "Contract", all_contracts,
+                format_func=lambda c: f"{_commodity_from_contract(c)} -- {c}",
+            )
+            auto_expiry = approx_option_expiry_days(current_contract)
+            if auto_expiry is not None:
+                st.caption(f"Expiry auto-set from contract: ~{auto_expiry}d (approx)")
 
         with st.form(f"add_{leg_type}"):
 
@@ -470,24 +470,31 @@ with st.container(border=True):
 
             kwargs = {}
             for col, (field, default) in zip(field_cols, spec["defaults"].items()):
-                kwargs[field] = _render_field(col, field, default)
+                if field == "expiry_days" and auto_expiry is not None:
+                    col.caption(f"expiry_days\n~{auto_expiry}d (auto)")
+                    kwargs[field] = auto_expiry
+                else:
+                    kwargs[field] = _render_field(col, field, default)
 
             with st.container(key="add_leg_btn"):
                 submitted = st.form_submit_button("Add to Portfolio")
 
         if submitted:
-            try:
-                kwargs["contract"] = current_contract
-                instrument = spec["build"](**kwargs)
-                st.session_state.portfolio.add(instrument)
-                st.session_state.position_meta.append({
-                    "commodity": commodity,
-                    "contract": current_contract,
-                    "vol_pct": None,
-                })
-                st.success(f"Added {leg_type}")
-            except Exception as e:
-                st.error(str(e))
+            if current_contract is None:
+                st.error("Pick a contract first.")
+            else:
+                try:
+                    kwargs["contract"] = current_contract
+                    instrument = spec["build"](**kwargs)
+                    st.session_state.portfolio.add(instrument)
+                    st.session_state.position_meta.append({
+                        "commodity": _commodity_from_contract(current_contract),
+                        "contract": current_contract,
+                        "vol_pct": None,
+                    })
+                    st.success(f"Added {leg_type}")
+                except Exception as e:
+                    st.error(str(e))
 
         st.subheader("Manage")
 
@@ -513,7 +520,7 @@ with st.container(border=True):
                         st.session_state.portfolio = portfolio_from_csv(tmp_path)
                         st.session_state.position_meta = [
                             {
-                                "commodity": _commodity_from_contract(pos.contract, fallback=commodity),
+                                "commodity": _commodity_from_contract(pos.contract),
                                 "contract": pos.contract,
                                 "vol_pct": None,
                             }
