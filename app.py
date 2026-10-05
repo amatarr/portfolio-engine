@@ -6,6 +6,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
+import yfinance as yf
 
 from vol_calculator import (
     Market,
@@ -100,6 +101,33 @@ def _load_live_quotes():
         return import_cqg_quotes(_CQG_QUOTES_PATH)
     except FileNotFoundError:
         return []
+
+
+# Free, no-key placeholder source while CQG API access gets sorted out --
+# continuous front-month quotes, delayed ~15-20min, not tied to a specific
+# deferred contract month.
+_CME_YF_TICKERS = {"Corn": "ZC=F", "Soybean": "ZS=F", "SRW Wheat": "ZW=F"}
+
+
+@st.cache_data(ttl=30)
+def _load_cme_quotes():
+
+    quotes = []
+
+    for commodity, ticker in _CME_YF_TICKERS.items():
+        try:
+            price = yf.Ticker(ticker).fast_info.get("lastPrice")
+        except Exception:
+            price = None
+
+        if price is not None:
+            quotes.append({
+                "commodity": commodity,
+                "contract": f"{ticker} (front month)",
+                "price": float(price),
+            })
+
+    return quotes
 
 
 def _require_password():
@@ -348,20 +376,18 @@ with st.container(border=True):
         st.subheader("Market")
 
         with st.container(key="cqg_quotes_box", border=True):
-            st.markdown("**Live Quotes (CQGXL)**")
+            st.markdown("**Live Quotes (CME via Yahoo -- preview)**")
+            st.caption("Placeholder source while CQG API access is pending. Delayed ~15-20min, front-month only.")
 
-            live_quotes = _load_live_quotes()
+            live_quotes = _load_cme_quotes()
 
             if live_quotes:
-                for q in live_quotes:
-                    st.session_state.market.futures_prices[q["contract"]] = q["price"]
-
                 quotes_df = pd.DataFrame(live_quotes).rename(
                     columns={"commodity": "Commodity", "contract": "Contract", "price": "Price"}
                 )
                 st.dataframe(quotes_df, hide_index=True, width="stretch")
             else:
-                st.caption("Live quotes file not found -- using manual entry below.")
+                st.caption("Live quotes unavailable right now -- using manual entry below.")
 
         commodity = st.selectbox("Underlying", list(COMMODITIES.keys()))
         available_months = COMMODITIES[commodity]["months"]
@@ -380,7 +406,7 @@ with st.container(border=True):
 
         if current_contract in quote_lookup:
             futures_price = quote_lookup[current_contract]
-            st.caption(f"Futures Price: {futures_price:.2f} (live, CQGXL)")
+            st.caption(f"Futures Price: {futures_price:.2f} (live quote)")
         else:
             existing_price = st.session_state.market.futures_prices.get(current_contract, 528.75)
             futures_price = st.number_input(
