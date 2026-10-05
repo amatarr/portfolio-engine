@@ -74,6 +74,7 @@ st.markdown(
     }
     .st-key-cqg_quotes_box {
         background-color: #cfe8fc; border-radius: 8px; padding: 0.5rem 0.75rem;
+        max-height: 260px; overflow-y: auto;
     }
     </style>
     """,
