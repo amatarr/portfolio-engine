@@ -74,7 +74,6 @@ st.markdown(
     }
     .st-key-cqg_quotes_box {
         background-color: #cfe8fc; border-radius: 8px; padding: 0.5rem 0.75rem;
-        max-height: 260px; overflow-y: auto;
     }
     </style>
     """,
@@ -421,25 +420,31 @@ with st.container(border=True):
                             st.caption("-")
                             continue
 
-                        h_contract, h_price, h_iv = st.columns([1.1, 1, 0.8])
-                        h_contract.caption("Contract")
-                        h_price.caption("Price")
-                        h_iv.caption("ATM IV")
+                        quotes_df = pd.DataFrame([
+                            {
+                                "Contract": code,
+                                "Price": float(st.session_state.market.futures_prices.get(
+                                    code, quote_price_lookup.get(code, 528.75)
+                                )),
+                                "ATM IV": None,
+                            }
+                            for code in codes
+                        ])
 
-                        for code in codes:
-                            c_contract, c_price, c_iv = st.columns([1.1, 1, 0.8])
-                            c_contract.markdown(code)
+                        edited_df = st.data_editor(
+                            quotes_df,
+                            hide_index=True,
+                            width="stretch",
+                            height=38 * (len(quotes_df) + 1),
+                            disabled=["Contract", "ATM IV"],
+                            key=f"quotes_editor_{comm}",
+                            column_config={
+                                "Price": st.column_config.NumberColumn(format="%.2f", step=0.25),
+                            },
+                        )
 
-                            default_price = st.session_state.market.futures_prices.get(
-                                code, quote_price_lookup.get(code, 528.75)
-                            )
-                            price = c_price.number_input(
-                                code, value=float(default_price), step=0.25,
-                                key=f"price_{code}", label_visibility="collapsed",
-                            )
-                            st.session_state.market.futures_prices[code] = price
-
-                            c_iv.markdown("--")
+                        for _, row in edited_df.iterrows():
+                            st.session_state.market.futures_prices[row["Contract"]] = float(row["Price"])
 
             with st.expander("Add contract manually"):
                 mc_comm, mc_month, mc_year, mc_price = st.columns([1.3, 1, 0.8, 1])
