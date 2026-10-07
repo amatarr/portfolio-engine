@@ -234,23 +234,25 @@ def _structure_kind(name):
     return re.sub(r"(?<!^)(?=[A-Z])", " ", kind)
 
 
-def _leg_row(leg, position_index, structure, contract, future_vol_pct=None):
+def _leg_row(leg, position_index, structure, contract, underlying_price, future_vol_pct=None):
 
     if isinstance(leg, Future):
         return {
-            "#": position_index, "Contract": contract, "Structure": structure, "Type": "Future",
+            "#": position_index, "Contract": contract, "Underlying Price": underlying_price,
+            "Structure": structure, "Type": "Future",
             "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None, "Vol (%)": future_vol_pct,
         }
 
     return {
-        "#": position_index, "Contract": contract, "Structure": structure,
+        "#": position_index, "Contract": contract, "Underlying Price": underlying_price,
+        "Structure": structure,
         "Type": "Call" if leg.option_type == "call" else "Put",
         "Quantity": leg.quantity, "Strike": leg.strike,
         "Expiry (d)": leg.expiry_days, "Vol (%)": leg.volatility * 100,
     }
 
 
-def _positions_table_for_commodity(portfolio, meta, commodity):
+def _positions_table_for_commodity(portfolio, meta, commodity, market):
 
     rows = []
 
@@ -260,12 +262,13 @@ def _positions_table_for_commodity(portfolio, meta, commodity):
             continue
 
         contract = meta[i].get("contract") or "-"
+        underlying_price = market.futures_prices.get(contract)
 
         if isinstance(pos, Structure):
             structure = _structure_kind(pos.name)
-            rows.extend(_leg_row(leg, i, structure, contract) for leg in pos.legs)
+            rows.extend(_leg_row(leg, i, structure, contract, underlying_price) for leg in pos.legs)
         else:
-            rows.append(_leg_row(pos, i, "-", contract, future_vol_pct=meta[i].get("vol_pct")))
+            rows.append(_leg_row(pos, i, "-", contract, underlying_price, future_vol_pct=meta[i].get("vol_pct")))
 
     return pd.DataFrame(rows)
 
@@ -473,14 +476,13 @@ with st.container(border=True):
         col_contract.warning("No contracts available -- set a price in Market above first.")
         current_contract = None
         auto_expiry = None
+        underlying_price = None
     else:
         current_contract = col_contract.selectbox(
             "Contract", all_contracts,
             format_func=lambda c: f"{_commodity_from_contract(c)} -- {c}",
         )
         underlying_price = st.session_state.market.futures_prices.get(current_contract)
-        if underlying_price is not None:
-            col_contract.caption(f"Underlying price: {underlying_price:.2f}")
         auto_expiry = approx_option_expiry_days(current_contract)
 
     with st.form(f"add_{leg_type}"):
@@ -494,6 +496,8 @@ with st.container(border=True):
                 kwargs[field] = auto_expiry
             else:
                 kwargs[field] = _render_field(col, field, default)
+                if field == "quantity" and underlying_price is not None:
+                    col.caption(f"Underlying: {underlying_price:.2f}")
 
         with st.container(key="add_leg_btn"):
             submitted = st.form_submit_button("Add to Portfolio")
@@ -602,13 +606,18 @@ with st.container(border=True):
 
             st.markdown(f"**{group_commodity} Positions**")
 
-            table = _positions_table_for_commodity(st.session_state.portfolio, meta, group_commodity)
+            table = _positions_table_for_commodity(
+                st.session_state.portfolio, meta, group_commodity, st.session_state.market
+            )
             selection = st.dataframe(
                 table,
                 hide_index=True,
                 width="stretch",
                 height=min(38 * (len(table) + 1), 400),
-                column_order=["Contract", "Structure", "Type", "Quantity", "Strike", "Expiry (d)", "Vol (%)"],
+                column_order=[
+                    "Contract", "Underlying Price", "Structure", "Type",
+                    "Quantity", "Strike", "Expiry (d)", "Vol (%)",
+                ],
                 on_select="rerun",
                 selection_mode="multi-row",
                 key=f"positions_table_{group_commodity}",
