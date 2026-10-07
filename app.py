@@ -35,8 +35,6 @@ from vol_calculator import (
     portfolio_from_csv,
     fetch_latest_sofr,
     COMMODITIES,
-    MONTH_CODES,
-    contract_code,
     approx_option_expiry_days,
     import_bushel_positions,
     import_cqg_quotes,
@@ -382,99 +380,35 @@ Prices are futures cents per bushel; time is in calendar days.
 # --- control panel (formerly the sidebar) ---
 with st.container(border=True):
 
-    col_market, col_add = st.columns([1, 2])
+    st.subheader("Market")
 
-    with col_market:
-        st.subheader("Market")
+    live_quotes = _load_live_quotes()
+    quote_price_lookup = {q["contract"]: q["price"] for q in live_quotes}
 
-        live_quotes = _load_live_quotes()
-        quote_price_lookup = {q["contract"]: q["price"] for q in live_quotes}
+    # Group known contracts by commodity -- live quotes first, then any
+    # contract already tracked in Market that the live feed doesn't cover
+    # (e.g. manually added earlier), so it doesn't silently disappear.
+    contracts_by_commodity = {name: [] for name in COMMODITIES.keys()}
 
-        # Group known contracts by commodity -- live quotes first, then any
-        # contract already tracked in Market that the live feed doesn't cover
-        # (e.g. manually added earlier), so it doesn't silently disappear.
-        contracts_by_commodity = {name: [] for name in COMMODITIES.keys()}
+    for q in live_quotes:
+        if q["commodity"] in contracts_by_commodity:
+            contracts_by_commodity[q["commodity"]].append(q["contract"])
 
-        for q in live_quotes:
-            if q["commodity"] in contracts_by_commodity:
-                contracts_by_commodity[q["commodity"]].append(q["contract"])
+    for code in st.session_state.market.futures_prices.keys():
+        comm = _commodity_from_contract(code, fallback=None)
+        if comm in contracts_by_commodity and code not in contracts_by_commodity[comm]:
+            contracts_by_commodity[comm].append(code)
 
-        for code in st.session_state.market.futures_prices.keys():
-            comm = _commodity_from_contract(code, fallback=None)
-            if comm in contracts_by_commodity and code not in contracts_by_commodity[comm]:
-                contracts_by_commodity[comm].append(code)
+    col_ir, col_sofr = st.columns([1, 2])
 
-        with st.container(key="cqg_quotes_box", border=True):
-            st.markdown("**Quotes**")
+    interest_rate_pct = col_ir.number_input(
+        "Interest Rate (%)", value=float(st.session_state.market.interest_rate) * 100,
+        step=0.01, format="%.2f",
+    )
+    st.session_state.market.interest_rate = interest_rate_pct / 100
 
-            if not any(contracts_by_commodity.values()):
-                st.caption("No contracts yet -- load Quotes, or add a leg below to start one.")
-            else:
-                comm_cols = st.columns(len(contracts_by_commodity))
-
-                for comm_col, (comm, codes) in zip(comm_cols, contracts_by_commodity.items()):
-                    with comm_col:
-                        st.markdown(f"**{comm.upper()}**")
-
-                        if not codes:
-                            st.caption("-")
-                            continue
-
-                        quotes_df = pd.DataFrame([
-                            {
-                                "Contract": code,
-                                "Price": float(st.session_state.market.futures_prices.get(
-                                    code, quote_price_lookup.get(code, 528.75)
-                                )),
-                                "ATM IV": None,
-                            }
-                            for code in codes
-                        ])
-
-                        edited_df = st.data_editor(
-                            quotes_df,
-                            hide_index=True,
-                            width="stretch",
-                            height=38 * (len(quotes_df) + 1),
-                            disabled=["Contract", "ATM IV"],
-                            key=f"quotes_editor_{comm}",
-                            column_config={
-                                "Price": st.column_config.NumberColumn(format="%.2f", step=0.25),
-                            },
-                        )
-
-                        for _, row in edited_df.iterrows():
-                            st.session_state.market.futures_prices[row["Contract"]] = float(row["Price"])
-
-            with st.expander("Add contract manually"):
-                mc_comm, mc_month, mc_year, mc_price = st.columns([1.3, 1, 0.8, 1])
-
-                manual_commodity = mc_comm.selectbox(
-                    "Commodity", list(COMMODITIES.keys()), key="manual_commodity"
-                )
-                manual_months = COMMODITIES[manual_commodity]["months"]
-                manual_month = mc_month.selectbox(
-                    "Month", manual_months,
-                    format_func=lambda m: f"{m} ({MONTH_CODES[m]})", key="manual_month",
-                )
-                manual_year = mc_year.number_input(
-                    "Year", value=2026, step=1, format="%d", key="manual_year"
-                )
-                manual_price = mc_price.number_input(
-                    "Price", value=528.75, step=0.25, key="manual_price"
-                )
-
-                if st.button("Add Contract"):
-                    new_code = contract_code(manual_commodity, manual_month, manual_year)
-                    st.session_state.market.futures_prices[new_code] = manual_price
-                    st.rerun()
-
-        interest_rate_pct = st.number_input(
-            "Interest Rate (%)", value=float(st.session_state.market.interest_rate) * 100,
-            step=0.01, format="%.2f",
-        )
-        st.session_state.market.interest_rate = interest_rate_pct / 100
-
+    with col_sofr:
+        st.write("")
         try:
             _sofr = _cached_sofr()
             st.caption(
@@ -485,136 +419,176 @@ with st.container(border=True):
         except Exception:
             st.caption("SOFR unavailable -- using manually entered rate.")
 
-    with col_add:
-        st.subheader("Add Leg")
+    with st.container(key="cqg_quotes_box", border=True):
 
-        all_contracts = [c for codes in contracts_by_commodity.values() for c in codes]
-
-        col_type, col_contract = st.columns([1, 1])
-
-        leg_type = col_type.selectbox("Type", list(LEG_BUILDERS.keys()))
-        spec = LEG_BUILDERS[leg_type]
-
-        if not all_contracts:
-            col_contract.warning("No contracts available -- set a price in Market above first.")
-            current_contract = None
-            auto_expiry = None
+        if not any(contracts_by_commodity.values()):
+            st.caption("No contracts yet -- add a leg below to start one.")
         else:
-            current_contract = col_contract.selectbox(
-                "Contract", all_contracts,
-                format_func=lambda c: f"{_commodity_from_contract(c)} -- {c}",
-            )
-            underlying_price = st.session_state.market.futures_prices.get(current_contract)
-            if underlying_price is not None:
-                col_contract.caption(f"Underlying price: {underlying_price:.2f}")
-            auto_expiry = approx_option_expiry_days(current_contract)
+            comm_cols = st.columns(len(contracts_by_commodity))
 
-        with st.form(f"add_{leg_type}"):
+            for comm_col, (comm, codes) in zip(comm_cols, contracts_by_commodity.items()):
+                with comm_col:
+                    st.markdown(f"**{comm.upper()}**")
 
-            field_cols = st.columns(len(spec["defaults"]))
+                    if not codes:
+                        st.caption("-")
+                        continue
 
-            kwargs = {}
-            for col, (field, default) in zip(field_cols, spec["defaults"].items()):
-                if field == "expiry_days" and auto_expiry is not None:
-                    col.number_input(field, value=auto_expiry, disabled=True)
-                    kwargs[field] = auto_expiry
-                else:
-                    kwargs[field] = _render_field(col, field, default)
+                    quotes_df = pd.DataFrame([
+                        {
+                            "Contract": code,
+                            "Price": float(st.session_state.market.futures_prices.get(
+                                code, quote_price_lookup.get(code, 528.75)
+                            )),
+                            "ATM IV": None,
+                        }
+                        for code in codes
+                    ])
 
-            with st.container(key="add_leg_btn"):
-                submitted = st.form_submit_button("Add to Portfolio")
+                    edited_df = st.data_editor(
+                        quotes_df,
+                        hide_index=True,
+                        width="stretch",
+                        height=38 * (len(quotes_df) + 1),
+                        disabled=["Contract", "ATM IV"],
+                        key=f"quotes_editor_{comm}",
+                        column_config={
+                            "Price": st.column_config.NumberColumn(format="%.2f", step=0.25),
+                        },
+                    )
 
-        if submitted:
-            if current_contract is None:
-                st.error("Pick a contract first.")
+                    for _, row in edited_df.iterrows():
+                        st.session_state.market.futures_prices[row["Contract"]] = float(row["Price"])
+
+    st.subheader("Add Leg")
+
+    all_contracts = [c for codes in contracts_by_commodity.values() for c in codes]
+
+    col_type, col_contract = st.columns([1, 1])
+
+    leg_type = col_type.selectbox("Type", list(LEG_BUILDERS.keys()))
+    spec = LEG_BUILDERS[leg_type]
+
+    if not all_contracts:
+        col_contract.warning("No contracts available -- set a price in Market above first.")
+        current_contract = None
+        auto_expiry = None
+    else:
+        current_contract = col_contract.selectbox(
+            "Contract", all_contracts,
+            format_func=lambda c: f"{_commodity_from_contract(c)} -- {c}",
+        )
+        underlying_price = st.session_state.market.futures_prices.get(current_contract)
+        if underlying_price is not None:
+            col_contract.caption(f"Underlying price: {underlying_price:.2f}")
+        auto_expiry = approx_option_expiry_days(current_contract)
+
+    with st.form(f"add_{leg_type}"):
+
+        field_cols = st.columns(len(spec["defaults"]))
+
+        kwargs = {}
+        for col, (field, default) in zip(field_cols, spec["defaults"].items()):
+            if field == "expiry_days" and auto_expiry is not None:
+                col.number_input(field, value=auto_expiry, disabled=True)
+                kwargs[field] = auto_expiry
             else:
-                try:
-                    kwargs["contract"] = current_contract
-                    instrument = spec["build"](**kwargs)
-                    st.session_state.portfolio.add(instrument)
-                    st.session_state.position_meta.append({
-                        "commodity": _commodity_from_contract(current_contract),
-                        "contract": current_contract,
-                        "vol_pct": None,
-                    })
+                kwargs[field] = _render_field(col, field, default)
+
+        with st.container(key="add_leg_btn"):
+            submitted = st.form_submit_button("Add to Portfolio")
+
+    if submitted:
+        if current_contract is None:
+            st.error("Pick a contract first.")
+        else:
+            try:
+                kwargs["contract"] = current_contract
+                instrument = spec["build"](**kwargs)
+                st.session_state.portfolio.add(instrument)
+                st.session_state.position_meta.append({
+                    "commodity": _commodity_from_contract(current_contract),
+                    "contract": current_contract,
+                    "vol_pct": None,
+                })
+                _autosave_portfolio()
+                st.success(f"Added {leg_type}")
+            except Exception as e:
+                st.error(str(e))
+
+    st.subheader("Manage")
+
+    mc_manage, mc_import = st.columns([1.6, 1.4])
+
+    with mc_manage:
+        with st.container(key="clear_btn"):
+            if st.button("Clear Portfolio"):
+                st.session_state.portfolio = Portfolio()
+                st.session_state.position_meta = []
+                _autosave_portfolio()
+                st.rerun()
+
+        uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
+
+        mc_load, mc_download = st.columns(2)
+
+        with mc_load:
+            with st.container(key="file_btn_load"):
+                if uploaded is not None and st.button("Load uploaded CSV"):
+                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                        tmp.write(uploaded.getvalue())
+                        tmp_path = tmp.name
+                    st.session_state.portfolio = portfolio_from_csv(tmp_path)
+                    st.session_state.position_meta = [
+                        {
+                            "commodity": _commodity_from_contract(pos.contract),
+                            "contract": pos.contract,
+                            "vol_pct": None,
+                        }
+                        for pos in st.session_state.portfolio.positions
+                    ]
                     _autosave_portfolio()
-                    st.success(f"Added {leg_type}")
-                except Exception as e:
-                    st.error(str(e))
-
-        st.subheader("Manage")
-
-        mc_manage, mc_import = st.columns([1.6, 1.4])
-
-        with mc_manage:
-            with st.container(key="clear_btn"):
-                if st.button("Clear Portfolio"):
-                    st.session_state.portfolio = Portfolio()
-                    st.session_state.position_meta = []
-                    _autosave_portfolio()
+                    st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
                     st.rerun()
 
-            uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
+        with mc_download:
+            with st.container(key="file_btn_download"):
+                if st.session_state.portfolio.positions:
+                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                        portfolio_to_csv(st.session_state.portfolio, tmp.name)
+                        with open(tmp.name, "rb") as f:
+                            csv_bytes = f.read()
+                    st.download_button(
+                        "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
+                    )
 
-            mc_load, mc_download = st.columns(2)
+    with mc_import:
+        with st.container(key="daily_prop_upload_box", border=True):
 
-            with mc_load:
-                with st.container(key="file_btn_load"):
-                    if uploaded is not None and st.button("Load uploaded CSV"):
-                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                            tmp.write(uploaded.getvalue())
-                            tmp_path = tmp.name
-                        st.session_state.portfolio = portfolio_from_csv(tmp_path)
-                        st.session_state.position_meta = [
-                            {
-                                "commodity": _commodity_from_contract(pos.contract),
-                                "contract": pos.contract,
-                                "vol_pct": None,
-                            }
-                            for pos in st.session_state.portfolio.positions
-                        ]
+            st.markdown("**Daily_Prop_upload**")
+            st.caption("Bushel export -- adds to current positions.")
+
+            imported_file = st.file_uploader(
+                "Upload positions file", type="csv", key="bushel_uploader", label_visibility="collapsed"
+            )
+
+            with st.container(key="file_btn_import"):
+                if imported_file is not None and st.button("Add Imported Positions"):
+                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                        tmp.write(imported_file.getvalue())
+                        tmp_path = tmp.name
+                    try:
+                        imported = import_bushel_positions(tmp_path)
+                        for instrument, meta in imported:
+                            st.session_state.portfolio.add(instrument)
+                            st.session_state.position_meta.append(meta)
+                            if meta.get("settlement_price") is not None:
+                                st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
                         _autosave_portfolio()
-                        st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
+                        st.success(f"Added {len(imported)} imported position(s)")
                         st.rerun()
-
-            with mc_download:
-                with st.container(key="file_btn_download"):
-                    if st.session_state.portfolio.positions:
-                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                            portfolio_to_csv(st.session_state.portfolio, tmp.name)
-                            with open(tmp.name, "rb") as f:
-                                csv_bytes = f.read()
-                        st.download_button(
-                            "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
-                        )
-
-        with mc_import:
-            with st.container(key="daily_prop_upload_box", border=True):
-
-                st.markdown("**Daily_Prop_upload**")
-                st.caption("Bushel export -- adds to current positions.")
-
-                imported_file = st.file_uploader(
-                    "Upload positions file", type="csv", key="bushel_uploader", label_visibility="collapsed"
-                )
-
-                with st.container(key="file_btn_import"):
-                    if imported_file is not None and st.button("Add Imported Positions"):
-                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                            tmp.write(imported_file.getvalue())
-                            tmp_path = tmp.name
-                        try:
-                            imported = import_bushel_positions(tmp_path)
-                            for instrument, meta in imported:
-                                st.session_state.portfolio.add(instrument)
-                                st.session_state.position_meta.append(meta)
-                                if meta.get("settlement_price") is not None:
-                                    st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
-                            _autosave_portfolio()
-                            st.success(f"Added {len(imported)} imported position(s)")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Import failed: {e}")
+                    except Exception as e:
+                        st.error(f"Import failed: {e}")
 
     st.divider()
     st.subheader("Current Positions")
