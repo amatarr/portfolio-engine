@@ -287,6 +287,35 @@ def _default_portfolio():
     return Portfolio()
 
 
+_AUTOSAVE_PATH = "_autosave_portfolio.csv"
+
+
+def _autosave_portfolio():
+    """
+    Writes the current portfolio to disk so an accidental browser refresh
+    (which resets st.session_state) doesn't lose it. Not a real database --
+    just the last-known state, overwritten on every change.
+    """
+    try:
+        portfolio_to_csv(st.session_state.portfolio, _AUTOSAVE_PATH)
+    except Exception:
+        pass
+
+
+def _load_autosaved_portfolio():
+
+    try:
+        portfolio = portfolio_from_csv(_AUTOSAVE_PATH)
+    except FileNotFoundError:
+        return _default_portfolio(), []
+
+    meta = [
+        {"commodity": _commodity_from_contract(pos.contract), "contract": pos.contract, "vol_pct": None}
+        for pos in portfolio.positions
+    ]
+    return portfolio, meta
+
+
 def _commodity_from_contract(contract, fallback="Unknown"):
 
     if not contract:
@@ -304,7 +333,7 @@ def _download_df_button(df, label, filename):
 
 
 if "portfolio" not in st.session_state:
-    st.session_state.portfolio = _default_portfolio()
+    st.session_state.portfolio, st.session_state.position_meta = _load_autosaved_portfolio()
 
 if "position_meta" not in st.session_state:
     st.session_state.position_meta = []
@@ -457,6 +486,9 @@ with st.container(border=True):
                 "Contract", all_contracts,
                 format_func=lambda c: f"{_commodity_from_contract(c)} -- {c}",
             )
+            underlying_price = st.session_state.market.futures_prices.get(current_contract)
+            if underlying_price is not None:
+                col_contract.caption(f"Underlying price: {underlying_price:.2f}")
             auto_expiry = approx_option_expiry_days(current_contract)
 
         with st.form(f"add_{leg_type}"):
@@ -487,6 +519,7 @@ with st.container(border=True):
                         "contract": current_contract,
                         "vol_pct": None,
                     })
+                    _autosave_portfolio()
                     st.success(f"Added {leg_type}")
                 except Exception as e:
                     st.error(str(e))
@@ -500,6 +533,7 @@ with st.container(border=True):
                 if st.button("Clear Portfolio"):
                     st.session_state.portfolio = Portfolio()
                     st.session_state.position_meta = []
+                    _autosave_portfolio()
                     st.rerun()
 
             uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
@@ -521,6 +555,7 @@ with st.container(border=True):
                             }
                             for pos in st.session_state.portfolio.positions
                         ]
+                        _autosave_portfolio()
                         st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
                         st.rerun()
 
@@ -557,6 +592,7 @@ with st.container(border=True):
                                 st.session_state.position_meta.append(meta)
                                 if meta.get("settlement_price") is not None:
                                     st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
+                            _autosave_portfolio()
                             st.success(f"Added {len(imported)} imported position(s)")
                             st.rerun()
                         except Exception as e:
@@ -596,6 +632,7 @@ with st.container(border=True):
                 for i in selected_positions:
                     st.session_state.portfolio.positions.pop(i)
                     st.session_state.position_meta.pop(i)
+                _autosave_portfolio()
                 st.rerun()
 
 
@@ -687,11 +724,19 @@ with tabs[0]:
         if fs_contract:
             dollars = GreekEngine.report_dollars(portfolio, market, fs_contract)
 
+            formatted = {
+                k: (f"{v:.3f}" if k == "Value ($k)" else f"{v:.2f}")
+                for k, v in dollars.items()
+            }
+
             st.write("$k view")
-            st.table(pd.Series(dollars, name="Value").to_frame())
+            st.table(pd.Series(formatted, name="Value").to_frame())
 
             st.subheader("By Tenor")
-            tenor_df = report_by_tenor(portfolio, market, fs_contract).round(4)
+            tenor_df = report_by_tenor(portfolio, market, fs_contract)
+            tenor_df = tenor_df.apply(
+                lambda col: col.map(lambda v: f"{v:.3f}" if col.name == "Value ($k)" else f"{v:.2f}")
+            )
             st.dataframe(tenor_df)
             _download_df_button(tenor_df, "Download tenor report CSV", "report_by_tenor.csv")
 

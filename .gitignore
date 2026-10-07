@@ -18,6 +18,9 @@ Options, Futures, and Other Derivatives*.pdf
 CQG LINKS SHEET_*.xlsx
 ~$*.xlsx
 
+# Portfolio autosave -- runtime state, not project code
+_autosave_portfolio.csv
+
 # Deliverable exports (charts, generated docs) -- not project code
 powerpoint/
 
