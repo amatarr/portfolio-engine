@@ -487,20 +487,27 @@ with st.container(border=True):
 
     with st.form(f"add_{leg_type}"):
 
-        field_cols = st.columns(len(spec["defaults"]))
+        n_cols = len(spec["defaults"]) + (1 if underlying_price is not None else 0)
+        field_cols = st.columns(n_cols)
 
         kwargs = {}
-        for col, (field, default) in zip(field_cols, spec["defaults"].items()):
+        col_idx = 0
+        for field, default in spec["defaults"].items():
+            col = field_cols[col_idx]
+            col_idx += 1
+
             if field == "expiry_days" and auto_expiry is not None:
                 col.number_input(field, value=auto_expiry, disabled=True)
                 kwargs[field] = auto_expiry
             else:
                 kwargs[field] = _render_field(col, field, default)
-                if field == "quantity" and underlying_price is not None:
-                    col.number_input(
-                        "Underlying", value=float(underlying_price), disabled=True,
-                        key=f"underlying_display_{current_contract}",
-                    )
+
+            if field == "quantity" and underlying_price is not None:
+                field_cols[col_idx].number_input(
+                    "Underlying", value=float(underlying_price), disabled=True,
+                    key=f"underlying_display_{current_contract}",
+                )
+                col_idx += 1
 
         with st.container(key="add_leg_btn"):
             submitted = st.form_submit_button("Add to Portfolio")
