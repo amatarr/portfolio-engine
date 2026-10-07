@@ -411,22 +411,35 @@ with st.container(border=True):
             if not any(contracts_by_commodity.values()):
                 st.caption("No contracts yet -- load Quotes, or add a leg below to start one.")
             else:
-                for comm, codes in contracts_by_commodity.items():
-                    if not codes:
-                        continue
-                    st.markdown(f"**{comm.upper()}**")
-                    for code in codes:
-                        col_label, col_price = st.columns([1, 1])
-                        col_label.markdown(code)
+                comm_cols = st.columns(len(contracts_by_commodity))
 
-                        default_price = st.session_state.market.futures_prices.get(
-                            code, quote_price_lookup.get(code, 528.75)
-                        )
-                        price = col_price.number_input(
-                            code, value=float(default_price), step=0.25,
-                            key=f"price_{code}", label_visibility="collapsed",
-                        )
-                        st.session_state.market.futures_prices[code] = price
+                for comm_col, (comm, codes) in zip(comm_cols, contracts_by_commodity.items()):
+                    with comm_col:
+                        st.markdown(f"**{comm.upper()}**")
+
+                        if not codes:
+                            st.caption("-")
+                            continue
+
+                        h_contract, h_price, h_iv = st.columns([1.1, 1, 0.8])
+                        h_contract.caption("Contract")
+                        h_price.caption("Price")
+                        h_iv.caption("ATM IV")
+
+                        for code in codes:
+                            c_contract, c_price, c_iv = st.columns([1.1, 1, 0.8])
+                            c_contract.markdown(code)
+
+                            default_price = st.session_state.market.futures_prices.get(
+                                code, quote_price_lookup.get(code, 528.75)
+                            )
+                            price = c_price.number_input(
+                                code, value=float(default_price), step=0.25,
+                                key=f"price_{code}", label_visibility="collapsed",
+                            )
+                            st.session_state.market.futures_prices[code] = price
+
+                            c_iv.markdown("--")
 
             with st.expander("Add contract manually"):
                 mc_comm, mc_month, mc_year, mc_price = st.columns([1.3, 1, 0.8, 1])

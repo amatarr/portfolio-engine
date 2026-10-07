@@ -27,14 +27,14 @@ COMMODITIES = {
         "months": ["H", "K", "N", "U", "Z"],
         "multiplier": 50.0,
     },
-    "Soybean": {
-        "symbol": "ZS",
-        "months": ["F", "H", "K", "N", "Q", "U", "X"],
-        "multiplier": 50.0,
-    },
     "SRW Wheat": {
         "symbol": "ZW",
         "months": ["H", "K", "N", "U", "Z"],
+        "multiplier": 50.0,
+    },
+    "Soybean": {
+        "symbol": "ZS",
+        "months": ["F", "H", "K", "N", "Q", "U", "X"],
         "multiplier": 50.0,
     },
 }
