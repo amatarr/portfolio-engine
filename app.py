@@ -497,7 +497,10 @@ with st.container(border=True):
             else:
                 kwargs[field] = _render_field(col, field, default)
                 if field == "quantity" and underlying_price is not None:
-                    col.caption(f"Underlying: {underlying_price:.2f}")
+                    col.number_input(
+                        "Underlying", value=float(underlying_price), disabled=True,
+                        key=f"underlying_display_{current_contract}",
+                    )
 
         with st.container(key="add_leg_btn"):
             submitted = st.form_submit_button("Add to Portfolio")
