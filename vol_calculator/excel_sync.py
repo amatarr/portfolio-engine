@@ -98,6 +98,48 @@ def read_future_spot(ws, contracts, value_cell=FUTURE_SPOT_VALUE_CELL):
     return value if value in contracts else (contracts[0] if contracts else None)
 
 
+INTEREST_RATE_LABEL_CELL = "D10"
+INTEREST_RATE_VALUE_CELL = "E10"
+SOFR_CAPTION_CELL = "D11"
+
+
+def write_interest_rate_cell(ws, sofr=None, fallback_rate=0.039,
+                              label_cell=INTEREST_RATE_LABEL_CELL, value_cell=INTEREST_RATE_VALUE_CELL,
+                              caption_cell=SOFR_CAPTION_CELL):
+    """
+    Interest Rate (%) cell, pre-filled from live SOFR when available --
+    same pattern as the Streamlit Market panel: this is a plain editable
+    number, not a formula, so overwriting it with your own view sticks
+    (re-running the refresh script won't clobber a value you've already
+    changed, unless the cell is still empty).
+
+    sofr: the dict fetch_latest_sofr() returns, or None if that call
+    failed -- falls back to fallback_rate and says so in the caption.
+    """
+
+    ws[label_cell] = "Interest Rate (%):"
+
+    if ws[value_cell].value is None:
+        ws[value_cell] = round((sofr["rate"] if sofr else fallback_rate) * 100, 2)
+
+    if sofr:
+        ws[caption_cell] = (
+            f"SOFR: {sofr['rate'] * 100:.2f}% (updated {sofr['effective_date']}) -- {sofr['source_url']}"
+        )
+    else:
+        ws[caption_cell] = "SOFR unavailable -- using manually entered rate."
+
+
+def read_interest_rate(ws, fallback_rate=0.039, value_cell=INTEREST_RATE_VALUE_CELL):
+    """Reads the Interest Rate (%) cell as a decimal, falling back if empty/invalid."""
+
+    value = ws[value_cell].value
+    try:
+        return float(value) / 100
+    except (TypeError, ValueError):
+        return fallback_rate
+
+
 def contracts_from_imported(imported):
     """Distinct contracts, in order of first appearance."""
 

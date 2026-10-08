@@ -10,10 +10,12 @@ import openpyxl
 
 from vol_calculator import (
     Market, Portfolio, latest_daily_prop_file, import_bushel_positions,
+    fetch_latest_sofr,
     write_positions_table, write_greeks_sheet, write_spot_vol_ladder_sheet,
     write_heat_maps_sheet, write_stress_sheet, write_strike_sheet,
     write_breakevens_sheet, write_payoff_sheet,
     write_future_spot_selector, read_future_spot,
+    write_interest_rate_cell, read_interest_rate,
     contracts_from_imported, prices_from_imported,
 )
 
@@ -36,11 +38,20 @@ def main():
         portfolio.add(instrument)
 
     prices = prices_from_imported(imported)
-    market = Market(futures_prices=prices, interest_rate=DEFAULT_INTEREST_RATE)
+
+    try:
+        sofr = fetch_latest_sofr()
+    except Exception:
+        sofr = None
 
     wb = openpyxl.load_workbook(WORKBOOK_PATH)
 
     write_future_spot_selector(wb["Home"], contracts)
+    write_interest_rate_cell(wb["Home"], sofr=sofr, fallback_rate=DEFAULT_INTEREST_RATE)
+    interest_rate = read_interest_rate(wb["Home"], fallback_rate=DEFAULT_INTEREST_RATE)
+
+    market = Market(futures_prices=prices, interest_rate=interest_rate)
+
     write_positions_table(wb["Home"], imported, start_row=13)
 
     write_greeks_sheet(wb["Greeks"], portfolio, market, contracts)
@@ -55,7 +66,10 @@ def main():
 
     wb.save(WORKBOOK_PATH)
 
-    print(f"Refreshed from {path} -- {len(imported)} legs, {len(contracts)} contracts, Future Spot={future_spot}")
+    print(
+        f"Refreshed from {path} -- {len(imported)} legs, {len(contracts)} contracts, "
+        f"Future Spot={future_spot}, Interest Rate={interest_rate * 100:.2f}%"
+    )
 
 
 if __name__ == "__main__":
