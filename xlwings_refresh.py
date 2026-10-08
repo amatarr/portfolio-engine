@@ -20,6 +20,9 @@ from vol_calculator.xlwings_sync import (
     xw_write_future_spot_selector, xw_read_future_spot,
     xw_write_interest_rate_cell, xw_read_interest_rate,
     xw_write_positions_table, xw_write_greeks_sheet,
+    xw_write_spot_vol_ladder_sheet, xw_write_heat_maps_sheet,
+    xw_write_stress_sheet, xw_write_strike_sheet,
+    xw_write_payoff_sheet, xw_write_breakevens_sheet,
 )
 
 WORKBOOK_PATH = "Position_Analysis.xlsx"
@@ -60,6 +63,12 @@ def main():
 
     future_spot = xw_read_future_spot(home, contracts)
     xw_write_greeks_sheet(wb.sheets["Greeks"], portfolio, market, contracts)
+    xw_write_spot_vol_ladder_sheet(wb.sheets["Spot&Vol Ladder"], portfolio, market, future_spot)
+    xw_write_heat_maps_sheet(wb.sheets["Heat Maps"], portfolio, market, future_spot)
+    xw_write_stress_sheet(wb.sheets["Stress"], portfolio, market, future_spot)
+    xw_write_strike_sheet(wb.sheets["Strike"], portfolio, market)
+    xw_write_payoff_sheet(wb.sheets["Payoff"], portfolio, market, future_spot)
+    xw_write_breakevens_sheet(wb.sheets["Breakevens"], portfolio, market, future_spot)
 
     wb.save()
 
