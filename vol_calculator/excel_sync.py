@@ -3,6 +3,7 @@ from openpyxl.formatting.formatting import ConditionalFormattingList
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import LineChart, Reference
+from openpyxl.chart.marker import Marker
 
 from vol_calculator.instruments import Future, AmericanOption
 from vol_calculator.greeks import GreekEngine
@@ -420,13 +421,24 @@ def write_breakevens_sheet(ws, portfolio, market, contract, low=-15, high=15, st
     chart.title = f"Breakeven Parabola -- {contract}"
     chart.x_axis.title = "Spot Move %"
     chart.y_axis.title = "PnL"
-    chart.style = 2
+    chart.width, chart.height = 24, 12
 
     cats = Reference(ws, min_col=1, min_row=header_row + 1, max_row=data_end_row)
     for col in (2, 3, 4):
         data = Reference(ws, min_col=col, min_row=header_row, max_row=data_end_row)
         chart.add_data(data, titles_from_data=True)
     chart.set_categories(cats)
+
+    for series in chart.series[:2]:  # Quadratic, Numerical -- real curves get markers
+        series.marker = Marker(symbol="circle", size=5)
+        series.smooth = False
+
+    zero_line = chart.series[2]  # Zero reference -- dashed, no markers, muted gray
+    zero_line.marker = Marker(symbol="none")
+    zero_line.smooth = False
+    zero_line.graphicalProperties.line.dashStyle = "dash"
+    zero_line.graphicalProperties.line.solidFill = "999999"
+
     ws.add_chart(chart, f"F{header_row}")
 
     return ws
@@ -451,7 +463,7 @@ def write_payoff_sheet(ws, portfolio, market, contract, time_steps=(0, 30, 64), 
     chart.title = f"Payoff -- {contract}"
     chart.x_axis.title = "Spot Move %"
     chart.y_axis.title = "PnL"
-    chart.style = 2
+    chart.width, chart.height = 24, 12
 
     cats = Reference(ws, min_col=1, min_row=data_start_row, max_row=data_end_row)
 
@@ -460,6 +472,11 @@ def write_payoff_sheet(ws, portfolio, market, contract, time_steps=(0, 30, 64), 
         chart.add_data(data, titles_from_data=True)
 
     chart.set_categories(cats)
+
+    for series in chart.series:
+        series.marker = Marker(symbol="circle", size=4)
+        series.smooth = False
+
     ws.add_chart(chart, f"A{next_row + 2}")
 
     return ws
