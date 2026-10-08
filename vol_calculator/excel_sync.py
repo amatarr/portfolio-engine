@@ -1,4 +1,7 @@
 from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.formatting.formatting import ConditionalFormattingList
+from openpyxl.formatting.rule import ColorScaleRule
+from openpyxl.utils import get_column_letter
 
 from vol_calculator.instruments import Future, AmericanOption
 from vol_calculator.greeks import GreekEngine
@@ -277,19 +280,40 @@ def write_heat_maps_sheet(ws, portfolio, market, contract, metrics=("PnL", "Delt
     """
     One spot x vol grid per metric, stacked vertically -- rows are spot
     moves, columns are vol moves, same shape as the Streamlit Surface
-    tab's heatmap, just as plain numbers (conditional formatting /
-    color scale is applied in Excel itself, not here).
+    tab's heatmap. Each grid gets a real red/white/green color-scale
+    (negative/zero/positive), same visual as the matplotlib version,
+    via Excel's native conditional formatting instead of an image.
     """
 
     clear_range(ws, min_row=1, max_row=clear_rows, min_col=1, max_col=clear_cols)
+    ws.conditional_formatting = ConditionalFormattingList()
 
     row = 1
     for metric in metrics:
         df = spot_vol_surface(portfolio, market, contract, metric=metric)
+
+        block_start = row
         row = write_dataframe(
-            ws, df, start_row=row, label=f"{metric.upper()} (rows=spot move, cols=vol move)",
+            ws, df, start_row=block_start, label=f"{metric.upper()} (rows=spot move, cols=vol move)",
             include_index=True, index_label="Spot\\Vol",
-        ) + 1
+        )
+
+        data_start_row = block_start + 2
+        data_end_row = row - 1
+        data_start_col = get_column_letter(2)
+        data_end_col = get_column_letter(1 + len(df.columns))
+        cell_range = f"{data_start_col}{data_start_row}:{data_end_col}{data_end_row}"
+
+        ws.conditional_formatting.add(
+            cell_range,
+            ColorScaleRule(
+                start_type="min", start_color="F8696B",
+                mid_type="num", mid_value=0, mid_color="FFFFFF",
+                end_type="max", end_color="63BE7B",
+            ),
+        )
+
+        row += 1
 
     return ws
 
