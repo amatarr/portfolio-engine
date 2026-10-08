@@ -43,6 +43,8 @@ from vol_calculator.bushel_import import import_bushel_positions, latest_daily_p
 from vol_calculator.excel_sync import (
     write_positions_table,
     write_greeks_sheet,
+    write_future_spot_selector,
+    read_future_spot,
     contracts_from_imported,
     prices_from_imported,
     POSITIONS_HEADERS,
@@ -102,6 +104,8 @@ __all__ = [
     "latest_daily_prop_file",
     "write_positions_table",
     "write_greeks_sheet",
+    "write_future_spot_selector",
+    "read_future_spot",
     "contracts_from_imported",
     "prices_from_imported",
     "POSITIONS_HEADERS",

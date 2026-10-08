@@ -1,3 +1,5 @@
+from openpyxl.worksheet.datavalidation import DataValidation
+
 from vol_calculator.instruments import Future, AmericanOption
 from vol_calculator.greeks import GreekEngine
 
@@ -5,6 +7,43 @@ POSITIONS_HEADERS = [
     "Contract", "Commodity", "Type", "Quantity",
     "Strike", "Expiry (d)", "Vol (%)", "Settlement Price",
 ]
+
+FUTURE_SPOT_LABEL_CELL = "A10"
+FUTURE_SPOT_VALUE_CELL = "B10"
+
+
+def write_future_spot_selector(ws, contracts, label_cell=FUTURE_SPOT_LABEL_CELL, value_cell=FUTURE_SPOT_VALUE_CELL):
+    """
+    A native Excel dropdown (data validation list) of the contracts
+    currently in the book -- the "which contract is shocked" selector
+    for sheets that show one contract at a time (Ladders, Surface,
+    Stress, Strike, Payoff, Breakevens), same role as the Future Spot
+    selector in each Streamlit tab.
+
+    The dropdown itself works live in Excel. What's NOT live yet (no
+    xlwings): picking a new value here doesn't recompute the other
+    sheets by itself -- the refresh script needs to be re-run after
+    changing it, and it reads whatever's currently in value_cell.
+    """
+
+    ws[label_cell] = "Future Spot:"
+
+    if not contracts:
+        return
+
+    current = ws[value_cell].value
+    ws[value_cell] = current if current in contracts else contracts[0]
+
+    dv = DataValidation(type="list", formula1=f'"{",".join(contracts)}"', allow_blank=False)
+    ws.add_data_validation(dv)
+    dv.add(ws[value_cell])
+
+
+def read_future_spot(ws, contracts, value_cell=FUTURE_SPOT_VALUE_CELL):
+    """Reads the current Future Spot selection, falling back to the first contract if unset/invalid."""
+
+    value = ws[value_cell].value
+    return value if value in contracts else (contracts[0] if contracts else None)
 
 
 def contracts_from_imported(imported):
