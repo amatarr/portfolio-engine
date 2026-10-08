@@ -30,6 +30,21 @@ DAILY_PROP_FOLDER = "Daily prop"
 DEFAULT_INTEREST_RATE = 0.039
 
 
+def _get_workbook():
+    """
+    xw.Book.caller() works when this is invoked via RunPython from a
+    macro inside the workbook itself (the Refresh button) -- it gets a
+    reference to that exact calling book. Falls back to opening/
+    attaching by path for standalone terminal runs (testing, or running
+    this script directly without the button).
+    """
+
+    try:
+        return xw.Book.caller()
+    except Exception:
+        return xw.Book(WORKBOOK_PATH)
+
+
 def main():
 
     path = latest_daily_prop_file(DAILY_PROP_FOLDER)
@@ -50,7 +65,7 @@ def main():
     except Exception:
         sofr = None
 
-    wb = xw.Book(WORKBOOK_PATH)
+    wb = _get_workbook()
     home = wb.sheets["Home"]
 
     xw_write_future_spot_selector(home, contracts)
