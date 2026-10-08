@@ -2,6 +2,41 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 from vol_calculator.instruments import Future, AmericanOption
 from vol_calculator.greeks import GreekEngine
+from vol_calculator.scenarios import spot_ladder, vol_ladder
+
+
+def clear_range(ws, min_row=1, max_row=500, min_col=1, max_col=20):
+    """Blanks out a rectangular range -- used before rewriting a sheet/block so a shrinking table doesn't leave stale cells behind."""
+
+    for row in ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col):
+        for cell in row:
+            cell.value = None
+
+
+def write_dataframe(ws, df, start_row=1, start_col=1, label=None):
+    """
+    Writes a pandas DataFrame as a plain header + rows block, starting at
+    (start_row, start_col). If label is given, it goes on its own row
+    just above the header. Returns the row just after the last one
+    written, so callers can stack multiple tables on one sheet.
+    """
+
+    row = start_row
+
+    if label is not None:
+        ws.cell(row=row, column=start_col, value=label)
+        row += 1
+
+    for col, header in enumerate(df.columns, start=start_col):
+        ws.cell(row=row, column=col, value=header)
+    row += 1
+
+    for _, data_row in df.iterrows():
+        for col, value in enumerate(data_row, start=start_col):
+            ws.cell(row=row, column=col, value=round(value, 4) if isinstance(value, float) else value)
+        row += 1
+
+    return row
 
 POSITIONS_HEADERS = [
     "Contract", "Commodity", "Type", "Quantity",
@@ -157,5 +192,23 @@ def write_greeks_sheet(ws, portfolio, market, contracts, clear_rows=500):
         row_values = [contract] + [_round_greek(k, v) for k, v in dollars.items()]
         for col, value in enumerate(row_values, start=1):
             ws.cell(row=2 + i, column=col, value=value)
+
+    return ws
+
+
+def write_spot_vol_ladder_sheet(ws, portfolio, market, contract, clear_rows=500, clear_cols=12):
+    """
+    Spot ladder table, then a gap, then vol ladder table below it --
+    both for the one selected Future Spot contract, same shape/columns
+    as the Streamlit Ladders tab.
+    """
+
+    clear_range(ws, min_row=1, max_row=clear_rows, min_col=1, max_col=clear_cols)
+
+    spot_df = spot_ladder(portfolio, market, contract)
+    next_row = write_dataframe(ws, spot_df, start_row=1, label="SPOT LADDER")
+
+    vol_df = vol_ladder(portfolio, market, contract)
+    write_dataframe(ws, vol_df, start_row=next_row + 1, label="VOL LADDER")
 
     return ws
