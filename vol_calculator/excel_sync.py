@@ -2,6 +2,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.formatting.formatting import ConditionalFormattingList
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.utils import get_column_letter
+from openpyxl.chart import LineChart, Reference
 
 from vol_calculator.instruments import Future, AmericanOption
 from vol_calculator.greeks import GreekEngine
@@ -362,14 +363,19 @@ def write_strike_sheet(ws, portfolio, market, weight="quantity", clear_rows=200,
     return ws
 
 
-def write_breakevens_sheet(ws, portfolio, market, contract, clear_rows=50, clear_cols=6):
+def write_breakevens_sheet(ws, portfolio, market, contract, low=-15, high=15, step=1, clear_rows=60, clear_cols=8):
     """
-    Both breakeven methods (quadratic Taylor estimate and the exact
-    numerical one), side by side for comparison -- same two numbers
-    shown on the Streamlit Breakevens tab.
+    Summary numbers (both breakeven methods) plus the actual parabola:
+    Quadratic PnL(dF) = Delta*dF + 0.5*Gamma*dF^2 + Theta, charted
+    alongside the exact next-day PnL curve (via payoff_diagram at
+    time_steps=[1], same logic breakevens_numerical itself uses) and a
+    zero line, so the breakeven points are visible as where the curves
+    cross zero, not just the two numbers.
     """
 
     clear_range(ws, min_row=1, max_row=clear_rows, min_col=1, max_col=clear_cols)
+    for chart in list(ws._charts):
+        ws._charts.remove(chart)
 
     quad = breakevens_quadratic(portfolio, market, contract)
     numeric = breakevens_numerical(portfolio, market, contract)
@@ -386,15 +392,74 @@ def write_breakevens_sheet(ws, portfolio, market, contract, clear_rows=50, clear
     ws.cell(row=3, column=2, value=round(numeric["downside"], 4) if numeric["downside"] is not None else None)
     ws.cell(row=3, column=3, value=round(numeric["upside"], 4) if numeric["upside"] is not None else None)
 
+    delta = GreekEngine.delta(portfolio, market, contract)
+    gamma = GreekEngine.gamma(portfolio, market, contract)
+    theta = GreekEngine.theta(portfolio, market)
+    base_price = market.price_for(contract)
+
+    numeric_df = payoff_diagram(portfolio, market, [1], contract, low=low, high=high, step=step)
+
+    header_row = 5
+    for col, h in enumerate(["Spot Move %", "Quadratic PnL", "Numerical PnL (T+1d)", "Zero"], start=1):
+        ws.cell(row=header_row, column=col, value=h)
+
+    row = header_row + 1
+    for _, r in numeric_df.iterrows():
+        pct = r["Spot Move %"]
+        dF = base_price * pct / 100
+        quad_pnl = delta * dF + 0.5 * gamma * dF ** 2 + theta
+        ws.cell(row=row, column=1, value=pct)
+        ws.cell(row=row, column=2, value=round(quad_pnl, 4))
+        ws.cell(row=row, column=3, value=round(r["T+1d"], 4))
+        ws.cell(row=row, column=4, value=0)
+        row += 1
+
+    data_end_row = row - 1
+
+    chart = LineChart()
+    chart.title = f"Breakeven Parabola -- {contract}"
+    chart.x_axis.title = "Spot Move %"
+    chart.y_axis.title = "PnL"
+    chart.style = 2
+
+    cats = Reference(ws, min_col=1, min_row=header_row + 1, max_row=data_end_row)
+    for col in (2, 3, 4):
+        data = Reference(ws, min_col=col, min_row=header_row, max_row=data_end_row)
+        chart.add_data(data, titles_from_data=True)
+    chart.set_categories(cats)
+    ws.add_chart(chart, f"F{header_row}")
+
     return ws
 
 
 def write_payoff_sheet(ws, portfolio, market, contract, time_steps=(0, 30, 64), clear_rows=200, clear_cols=12):
-    """P&L vs. spot, overlaid across time-to-expiry steps -- same columns as the Streamlit Payoff tab."""
+    """P&L vs. spot, overlaid across time-to-expiry steps -- same columns as the Streamlit Payoff tab, plus a line chart."""
 
     clear_range(ws, min_row=1, max_row=clear_rows, min_col=1, max_col=clear_cols)
+    for chart in list(ws._charts):
+        ws._charts.remove(chart)
 
     df = payoff_diagram(portfolio, market, list(time_steps), contract)
-    write_dataframe(ws, df, start_row=1, label="PAYOFF")
+    next_row = write_dataframe(ws, df, start_row=1, label="PAYOFF")
+
+    header_row = 2
+    data_start_row = 3
+    data_end_row = next_row - 1
+    n_series = len(df.columns) - 2  # exclude "Spot Move %" and "Futures Price"
+
+    chart = LineChart()
+    chart.title = f"Payoff -- {contract}"
+    chart.x_axis.title = "Spot Move %"
+    chart.y_axis.title = "PnL"
+    chart.style = 2
+
+    cats = Reference(ws, min_col=1, min_row=data_start_row, max_row=data_end_row)
+
+    for col in range(3, 3 + n_series):  # PnL columns start at col 3 (Spot Move %, Futures Price, then T+Xd...)
+        data = Reference(ws, min_col=col, min_row=header_row, max_row=data_end_row)
+        chart.add_data(data, titles_from_data=True)
+
+    chart.set_categories(cats)
+    ws.add_chart(chart, f"A{next_row + 2}")
 
     return ws
