@@ -54,8 +54,10 @@ def xw_write_interest_rate_cell(sheet, sofr=None, fallback_rate=0.039):
 
     sheet[INTEREST_RATE_LABEL_CELL].value = "Interest Rate (%):"
 
-    if sheet[INTEREST_RATE_VALUE_CELL].value is None:
-        sheet[INTEREST_RATE_VALUE_CELL].value = round((sofr["rate"] if sofr else fallback_rate) * 100, 2)
+    if sofr:
+        sheet[INTEREST_RATE_VALUE_CELL].value = round(sofr["rate"] * 100, 2)
+    elif sheet[INTEREST_RATE_VALUE_CELL].value is None:
+        sheet[INTEREST_RATE_VALUE_CELL].value = round(fallback_rate * 100, 2)
 
     if sofr:
         sheet[SOFR_CAPTION_CELL].value = (

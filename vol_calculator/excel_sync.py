@@ -112,11 +112,9 @@ def write_interest_rate_cell(ws, sofr=None, fallback_rate=0.039,
                               label_cell=INTEREST_RATE_LABEL_CELL, value_cell=INTEREST_RATE_VALUE_CELL,
                               caption_cell=SOFR_CAPTION_CELL):
     """
-    Interest Rate (%) cell, pre-filled from live SOFR when available --
-    same pattern as the Streamlit Market panel: this is a plain editable
-    number, not a formula, so overwriting it with your own view sticks
-    (re-running the refresh script won't clobber a value you've already
-    changed, unless the cell is still empty).
+    Interest Rate (%) cell, synced to live SOFR on every refresh when
+    available -- falls back to whatever's already in the cell (or
+    fallback_rate if it's empty) only when the SOFR fetch itself fails.
 
     sofr: the dict fetch_latest_sofr() returns, or None if that call
     failed -- falls back to fallback_rate and says so in the caption.
@@ -124,8 +122,10 @@ def write_interest_rate_cell(ws, sofr=None, fallback_rate=0.039,
 
     ws[label_cell] = "Interest Rate (%):"
 
-    if ws[value_cell].value is None:
-        ws[value_cell] = round((sofr["rate"] if sofr else fallback_rate) * 100, 2)
+    if sofr:
+        ws[value_cell] = round(sofr["rate"] * 100, 2)
+    elif ws[value_cell].value is None:
+        ws[value_cell] = round(fallback_rate * 100, 2)
 
     if sofr:
         ws[caption_cell] = (
