@@ -1,9 +1,37 @@
 from vol_calculator.instruments import Future, AmericanOption
+from vol_calculator.greeks import GreekEngine
 
 POSITIONS_HEADERS = [
     "Contract", "Commodity", "Type", "Quantity",
     "Strike", "Expiry (d)", "Vol (%)", "Settlement Price",
 ]
+
+
+def contracts_from_imported(imported):
+    """Distinct contracts, in order of first appearance."""
+
+    seen = []
+    for _, meta in imported:
+        c = meta.get("contract")
+        if c and c not in seen:
+            seen.append(c)
+    return seen
+
+
+def prices_from_imported(imported):
+    """
+    contract -> settlement price, from the Daily Prop file itself --
+    stand-in for live CQGXL prices until the Home sheet's formula cells
+    have cached values to read (requires Excel to have actually
+    recalculated with CQGXL connected and been saved at least once).
+    """
+
+    prices = {}
+    for _, meta in imported:
+        price = meta.get("settlement_price")
+        if price is not None:
+            prices[meta["contract"]] = price
+    return prices
 
 
 def _position_row(instrument, meta):
@@ -25,22 +53,70 @@ def _position_row(instrument, meta):
     raise TypeError(f"Unsupported instrument type: {type(instrument)}")
 
 
-def write_positions_sheet(workbook, imported, sheet_name="Positions"):
+def write_positions_table(ws, imported, start_row=11, clear_rows=500):
     """
     Writes (instrument, meta) pairs -- the same shape import_bushel_positions
-    returns -- into a sheet as a plain header + rows table. Overwrites
-    whatever was there, since this always reflects the latest Daily Prop
-    file, not something to hand-edit in place.
+    returns -- into an existing worksheet, starting at start_row (a
+    "POSITIONS" label, then headers, then one row per leg). Clears a
+    generous range below start_row first, so a shrinking book doesn't
+    leave stale rows behind from a previous, longer day's data.
     """
 
-    if sheet_name in workbook.sheetnames:
-        del workbook[sheet_name]
+    n_cols = len(POSITIONS_HEADERS)
 
-    ws = workbook.create_sheet(sheet_name)
+    for row in ws.iter_rows(
+        min_row=start_row, max_row=start_row + clear_rows, min_col=1, max_col=n_cols
+    ):
+        for cell in row:
+            cell.value = None
 
-    ws.append(POSITIONS_HEADERS)
+    ws.cell(row=start_row, column=1, value="POSITIONS")
 
-    for instrument, meta in imported:
-        ws.append(_position_row(instrument, meta))
+    header_row = start_row + 1
+    for col, header in enumerate(POSITIONS_HEADERS, start=1):
+        ws.cell(row=header_row, column=col, value=header)
+
+    for i, (instrument, meta) in enumerate(imported):
+        row_values = _position_row(instrument, meta)
+        for col, value in enumerate(row_values, start=1):
+            ws.cell(row=header_row + 1 + i, column=col, value=value)
+
+    return ws
+
+
+def _round_greek(key, value):
+    return round(value, 3) if key == "Value ($k)" else round(value, 2)
+
+
+def write_greeks_sheet(ws, portfolio, market, contracts, clear_rows=500):
+    """
+    One row per contract, each computed with that contract as the shocked
+    "Future Spot" -- same GreekEngine.report_dollars() used by the
+    Streamlit Greeks tab, same decimal precision (Value ($k) at 3dp,
+    every other Greek at 2dp). Gives all contracts at once instead of
+    one-at-a-time like the Streamlit selector, since this is a static
+    snapshot, not a live dropdown.
+    """
+
+    if not contracts:
+        return ws
+
+    sample = GreekEngine.report_dollars(portfolio, market, contracts[0])
+    greek_names = list(sample.keys())
+    n_cols = 1 + len(greek_names)
+
+    for row in ws.iter_rows(min_row=1, max_row=clear_rows, min_col=1, max_col=n_cols):
+        for cell in row:
+            cell.value = None
+
+    header = ["Contract"] + greek_names
+    for col, value in enumerate(header, start=1):
+        ws.cell(row=1, column=col, value=value)
+
+    for i, contract in enumerate(contracts):
+        dollars = GreekEngine.report_dollars(portfolio, market, contract)
+        row_values = [contract] + [_round_greek(k, v) for k, v in dollars.items()]
+        for col, value in enumerate(row_values, start=1):
+            ws.cell(row=2 + i, column=col, value=value)
 
     return ws
