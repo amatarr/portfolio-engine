@@ -21,6 +21,10 @@ CQG LINKS SHEET_*.xlsx
 # Portfolio autosave -- runtime state, not project code
 _autosave_portfolio.csv
 
+# Real position/trade data -- not code, not for git
+Daily prop/
+Position_Analysis.xlsx
+
 # Deliverable exports (charts, generated docs) -- not project code
 powerpoint/
 

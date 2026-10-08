@@ -1,9 +1,34 @@
+import glob
+import os
+import re
 from datetime import date, datetime
 
 import pandas as pd
 
 from vol_calculator.instruments import Future, AmericanOption
 from vol_calculator.contracts import contract_code
+
+_DAILY_PROP_FILENAME = re.compile(r"Daily_Prop_Bod_Detail_(\d{4})_(\d{2})_(\d{2})\.csv$")
+
+
+def latest_daily_prop_file(folder):
+    """
+    Finds the most recent "Daily_Prop_Bod_Detail_YYYY_MM_DD.csv" in folder,
+    by the date in the filename (not file-modified time, in case a stale
+    file gets re-saved). Returns None if the folder has no matching file.
+    """
+
+    candidates = []
+
+    for path in glob.glob(os.path.join(folder, "Daily_Prop_Bod_Detail_*.csv")):
+        m = _DAILY_PROP_FILENAME.search(os.path.basename(path))
+        if m:
+            candidates.append((date(int(m.group(1)), int(m.group(2)), int(m.group(3))), path))
+
+    if not candidates:
+        return None
+
+    return max(candidates, key=lambda c: c[0])[1]
 
 # Position of each field in the vendor export, by Excel column letter --
 # mapping is positional (not by header name), since header text is not

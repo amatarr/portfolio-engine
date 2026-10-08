@@ -39,7 +39,8 @@ from vol_calculator.contracts import (
     multiplier_for,
     approx_option_expiry_days,
 )
-from vol_calculator.bushel_import import import_bushel_positions
+from vol_calculator.bushel_import import import_bushel_positions, latest_daily_prop_file
+from vol_calculator.excel_sync import write_positions_sheet, POSITIONS_HEADERS
 from vol_calculator.cqg_quotes import import_cqg_quotes
 from vol_calculator.structures import (
     call_spread,
@@ -92,6 +93,9 @@ __all__ = [
     "multiplier_for",
     "approx_option_expiry_days",
     "import_bushel_positions",
+    "latest_daily_prop_file",
+    "write_positions_sheet",
+    "POSITIONS_HEADERS",
     "import_cqg_quotes",
     "call_spread",
     "put_spread",
