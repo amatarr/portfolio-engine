@@ -11,6 +11,8 @@ import openpyxl
 from vol_calculator import (
     Market, Portfolio, latest_daily_prop_file, import_bushel_positions,
     write_positions_table, write_greeks_sheet, write_spot_vol_ladder_sheet,
+    write_heat_maps_sheet, write_stress_sheet, write_strike_sheet,
+    write_breakevens_sheet, write_payoff_sheet,
     write_future_spot_selector, read_future_spot,
     contracts_from_imported, prices_from_imported,
 )
@@ -45,6 +47,11 @@ def main():
 
     future_spot = read_future_spot(wb["Home"], contracts)
     write_spot_vol_ladder_sheet(wb["Spot&Vol Ladder"], portfolio, market, future_spot)
+    write_heat_maps_sheet(wb["Heat Maps"], portfolio, market, future_spot)
+    write_stress_sheet(wb["Stress"], portfolio, market, future_spot)
+    write_strike_sheet(wb["Strike"], portfolio, market)
+    write_payoff_sheet(wb["Payoff"], portfolio, market, future_spot)
+    write_breakevens_sheet(wb["Breakevens"], portfolio, market, future_spot)
 
     wb.save(WORKBOOK_PATH)
 
