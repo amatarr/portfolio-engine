@@ -46,12 +46,23 @@ def xw_write_future_spot_selector(sheet, contracts):
     if value_cell.value not in contracts:
         value_cell.value = contracts[0]
 
+    # Clearing just this one cell's validation isn't enough -- repeated
+    # automated Delete()+Add() cycles on the same cell can corrupt a
+    # sheet's internal validation state until every subsequent Add()
+    # silently fails, even on an untouched cell. Wiping the whole
+    # sheet's validation first resets that reliably.
     try:
-        value_cell.api.Validation.Delete()
+        sheet.api.Cells.Validation.Delete()
     except Exception:
         pass
 
-    value_cell.api.Validation.Add(Type=_XL_VALIDATE_LIST, Formula1=",".join(contracts))
+    # AlertStyle/Operator have no real effect for a list-type validation,
+    # but must be passed explicitly -- omitting them (relying on COM to
+    # fill in VBA's optional-argument defaults) fails when called this
+    # way, through raw COM dispatch rather than from inside VBA itself.
+    value_cell.api.Validation.Add(
+        Type=_XL_VALIDATE_LIST, AlertStyle=1, Operator=1, Formula1=",".join(contracts)
+    )
 
 
 def xw_read_future_spot(sheet, contracts):
@@ -60,7 +71,7 @@ def xw_read_future_spot(sheet, contracts):
     return value if value in contracts else (contracts[0] if contracts else None)
 
 
-def xw_write_interest_rate_cell(sheet, sofr=None, fallback_rate=0.039):
+def xw_write_interest_rate_cell(sheet, sofr=None, fallback_rate=0.039, error=None):
 
     sheet[INTEREST_RATE_LABEL_CELL].value = "Interest Rate (%):"
 
@@ -73,6 +84,8 @@ def xw_write_interest_rate_cell(sheet, sofr=None, fallback_rate=0.039):
         sheet[SOFR_CAPTION_CELL].value = (
             f"SOFR: {sofr['rate'] * 100:.2f}% (updated {sofr['effective_date']}) -- {sofr['source_url']}"
         )
+    elif error:
+        sheet[SOFR_CAPTION_CELL].value = f"SOFR fetch failed -- using manually entered rate. Error: {error}"
     else:
         sheet[SOFR_CAPTION_CELL].value = "SOFR unavailable -- using manually entered rate."
 

@@ -60,16 +60,18 @@ def main():
 
     prices = prices_from_imported(imported)
 
+    sofr = None
+    sofr_error = None
     try:
         sofr = fetch_latest_sofr()
-    except Exception:
-        sofr = None
+    except Exception as e:
+        sofr_error = f"{type(e).__name__}: {e}"
 
     wb = _get_workbook()
     home = wb.sheets["Home"]
 
     xw_write_future_spot_selector(home, contracts)
-    xw_write_interest_rate_cell(home, sofr=sofr, fallback_rate=DEFAULT_INTEREST_RATE)
+    xw_write_interest_rate_cell(home, sofr=sofr, fallback_rate=DEFAULT_INTEREST_RATE, error=sofr_error)
     interest_rate = xw_read_interest_rate(home, fallback_rate=DEFAULT_INTEREST_RATE)
 
     market = Market(futures_prices=prices, interest_rate=interest_rate)
