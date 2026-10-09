@@ -88,7 +88,7 @@ _CQG_QUOTES_PATH = "CQG LINKS SHEET_.xlsx"
 _SUPABASE_QUOTES_TABLE = "Quotes"
 
 
-@st.cache_data(ttl=8)
+@st.cache_data(ttl=4)
 def _fetch_supabase_quotes(url, anon_key):
 
     from supabase import create_client
@@ -386,7 +386,7 @@ def _build_contracts_by_commodity(live_quotes):
     return contracts_by_commodity
 
 
-@st.fragment(run_every="10s")
+@st.fragment(run_every="5s")
 def _render_quotes_box():
     """
     Polls the live quotes source every 10s independently of the rest of
