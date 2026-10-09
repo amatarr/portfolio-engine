@@ -50,9 +50,19 @@ def read_live_quotes():
             if not symbol or price is None:
                 continue
 
+            try:
+                price = float(price)
+            except (TypeError, ValueError):
+                # CQGXL cells show text like "Disconnected from server." or
+                # "#N/A" during a transient connection drop instead of a
+                # number -- skip just this one contract for this cycle
+                # rather than crashing the whole loop over it.
+                print(f"Skipping {symbol}: non-numeric price {price!r}")
+                continue
+
             quotes.append({
                 "contract": _convert_cqg_symbol(str(symbol)),
-                "price": float(price),
+                "price": price,
                 "commodity": commodity,
             })
 
@@ -83,9 +93,15 @@ def main():
     print(f"Pushing live CQGXL quotes to Supabase every {PUSH_INTERVAL_SECONDS}s. Ctrl+C to stop.")
 
     while True:
-        quotes = read_live_quotes()
-        n = push_once(client, quotes)
-        print(f"Pushed {n} quote(s)")
+        try:
+            quotes = read_live_quotes()
+            n = push_once(client, quotes)
+            print(f"Pushed {n} quote(s)")
+        except Exception as e:
+            # Keep the loop alive through transient COM/network errors --
+            # one bad cycle shouldn't stop future ones from refreshing.
+            print(f"Cycle failed, will retry next interval: {type(e).__name__}: {e}")
+
         time.sleep(PUSH_INTERVAL_SECONDS)
 
 
