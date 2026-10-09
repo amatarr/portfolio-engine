@@ -18,7 +18,7 @@ from vol_calculator.cqg_quotes import _convert_cqg_symbol
 
 WORKBOOK_PATH = "Position_Analysis.xlsx"
 TABLE_NAME = "Quotes"
-PUSH_INTERVAL_SECONDS = 10
+PUSH_INTERVAL_SECONDS = 5
 
 # (commodity, symbol_col, price_col) -- matches the Home sheet's own
 # CORN/SOYBEANS/WHEAT layout (rows 3-8 under each header).
