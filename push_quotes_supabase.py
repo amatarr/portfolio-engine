@@ -73,14 +73,20 @@ def push_once(client, quotes):
 
     import datetime
 
+    if not quotes:
+        return 0
+
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-    for q in quotes:
-        client.table(TABLE_NAME).upsert({
-            "contract": q["contract"],
-            "price": q["price"],
-            "updated_at": now,
-        }, on_conflict="contract").execute()
+    rows = [
+        {"contract": q["contract"], "price": q["price"], "updated_at": now}
+        for q in quotes
+    ]
+
+    # One network round-trip for every contract instead of one per
+    # contract -- at a short poll interval, 18 sequential calls (~100ms
+    # each) was eating a meaningful chunk of the cycle budget on its own.
+    client.table(TABLE_NAME).upsert(rows, on_conflict="contract").execute()
 
     return len(quotes)
 
