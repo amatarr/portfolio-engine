@@ -6,3 +6,4 @@ scipy
 streamlit
 requests
 openpyxl
+supabase

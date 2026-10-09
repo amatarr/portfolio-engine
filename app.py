@@ -85,13 +85,46 @@ def _cached_sofr():
 
 
 _CQG_QUOTES_PATH = "CQG LINKS SHEET_.xlsx"
+_SUPABASE_QUOTES_TABLE = "Quotes"
+
+
+@st.cache_data(ttl=15)
+def _fetch_supabase_quotes(url, anon_key):
+
+    from supabase import create_client
+
+    client = create_client(url, anon_key)
+    resp = client.table(_SUPABASE_QUOTES_TABLE).select("*").execute()
+
+    return [
+        {
+            "commodity": _commodity_from_contract(row["contract"]),
+            "contract": row["contract"],
+            "price": row["price"],
+        }
+        for row in resp.data
+    ]
 
 
 def _load_live_quotes():
     """
-    Reads the CQGXL export fresh on every rerun -- only present when
-    running locally with CQGXL writing to it.
+    Prefers Supabase (fed by push_quotes_supabase.py reading live CQGXL
+    cells off the open workbook) -- works both locally and on the
+    deployed app, since it's a normal outbound read, not a local file.
+    Falls back to the local CQGXL export file (local-only), then to
+    empty if neither is available.
     """
+
+    supabase_url = st.secrets.get("supabase_url")
+    supabase_anon_key = st.secrets.get("supabase_anon_key")
+
+    if supabase_url and supabase_anon_key:
+        try:
+            quotes = _fetch_supabase_quotes(supabase_url, supabase_anon_key)
+            if quotes:
+                return quotes
+        except Exception:
+            pass
 
     try:
         return import_cqg_quotes(_CQG_QUOTES_PATH)
@@ -440,8 +473,8 @@ with st.container(border=True):
                     quotes_df = pd.DataFrame([
                         {
                             "Contract": code,
-                            "Price": float(st.session_state.market.futures_prices.get(
-                                code, quote_price_lookup.get(code, 528.75)
+                            "Price": float(quote_price_lookup.get(
+                                code, st.session_state.market.futures_prices.get(code, 528.75)
                             )),
                             "ATM IV": None,
                         }

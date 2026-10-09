@@ -24,6 +24,8 @@ _autosave_portfolio.csv
 # Real position/trade data -- not code, not for git
 Daily prop/
 Position_Analysis.xlsx
+Position_Analysis.xlsm
+~$Position_Analysis.xls*
 
 # Deliverable exports (charts, generated docs) -- not project code
 powerpoint/
