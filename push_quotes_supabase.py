@@ -70,7 +70,7 @@ def push_once(client, quotes):
             "contract": q["contract"],
             "price": q["price"],
             "updated_at": now,
-        }).execute()
+        }, on_conflict="contract").execute()
 
     return len(quotes)
 
