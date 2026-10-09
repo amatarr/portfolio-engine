@@ -88,7 +88,7 @@ _CQG_QUOTES_PATH = "CQG LINKS SHEET_.xlsx"
 _SUPABASE_QUOTES_TABLE = "Quotes"
 
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=8)
 def _fetch_supabase_quotes(url, anon_key):
 
     from supabase import create_client
@@ -365,6 +365,84 @@ def _download_df_button(df, label, filename):
     st.download_button(label, data=df.to_csv().encode("utf-8"), file_name=filename, mime="text/csv")
 
 
+def _build_contracts_by_commodity(live_quotes):
+    """
+    Groups known contracts by commodity -- live quotes first, then any
+    contract already tracked in Market that the live feed doesn't cover
+    (e.g. manually added earlier), so it doesn't silently disappear.
+    """
+
+    contracts_by_commodity = {name: [] for name in COMMODITIES.keys()}
+
+    for q in live_quotes:
+        if q["commodity"] in contracts_by_commodity:
+            contracts_by_commodity[q["commodity"]].append(q["contract"])
+
+    for code in st.session_state.market.futures_prices.keys():
+        comm = _commodity_from_contract(code, fallback=None)
+        if comm in contracts_by_commodity and code not in contracts_by_commodity[comm]:
+            contracts_by_commodity[comm].append(code)
+
+    return contracts_by_commodity
+
+
+@st.fragment(run_every="10s")
+def _render_quotes_box():
+    """
+    Polls the live quotes source every 10s independently of the rest of
+    the page -- a fragment rerun only re-executes this function, not the
+    whole script, so the Add Leg form/other widgets don't reset while
+    this ticks. Writes straight into st.session_state.market.futures_
+    prices, same as a normal full rerun would.
+    """
+
+    live_quotes = _load_live_quotes()
+    quote_price_lookup = {q["contract"]: q["price"] for q in live_quotes}
+    contracts_by_commodity = _build_contracts_by_commodity(live_quotes)
+
+    with st.container(key="cqg_quotes_box", border=True):
+
+        if not any(contracts_by_commodity.values()):
+            st.caption("No contracts yet -- add a leg below to start one.")
+            return
+
+        comm_cols = st.columns(len(contracts_by_commodity))
+
+        for comm_col, (comm, codes) in zip(comm_cols, contracts_by_commodity.items()):
+            with comm_col:
+                st.markdown(f"**{comm.upper()}**")
+
+                if not codes:
+                    st.caption("-")
+                    continue
+
+                quotes_df = pd.DataFrame([
+                    {
+                        "Contract": code,
+                        "Price": float(quote_price_lookup.get(
+                            code, st.session_state.market.futures_prices.get(code, 528.75)
+                        )),
+                        "ATM IV": None,
+                    }
+                    for code in codes
+                ])
+
+                edited_df = st.data_editor(
+                    quotes_df,
+                    hide_index=True,
+                    width="stretch",
+                    height=38 * (len(quotes_df) + 1),
+                    disabled=["Contract", "ATM IV"],
+                    key=f"quotes_editor_{comm}",
+                    column_config={
+                        "Price": st.column_config.NumberColumn(format="%.2f", step=0.25),
+                    },
+                )
+
+                for _, row in edited_df.iterrows():
+                    st.session_state.market.futures_prices[row["Contract"]] = float(row["Price"])
+
+
 if "portfolio" not in st.session_state:
     st.session_state.portfolio, st.session_state.position_meta = _load_autosaved_portfolio()
 
@@ -419,21 +497,7 @@ with st.container(border=True):
     st.subheader("Market")
 
     live_quotes = _load_live_quotes()
-    quote_price_lookup = {q["contract"]: q["price"] for q in live_quotes}
-
-    # Group known contracts by commodity -- live quotes first, then any
-    # contract already tracked in Market that the live feed doesn't cover
-    # (e.g. manually added earlier), so it doesn't silently disappear.
-    contracts_by_commodity = {name: [] for name in COMMODITIES.keys()}
-
-    for q in live_quotes:
-        if q["commodity"] in contracts_by_commodity:
-            contracts_by_commodity[q["commodity"]].append(q["contract"])
-
-    for code in st.session_state.market.futures_prices.keys():
-        comm = _commodity_from_contract(code, fallback=None)
-        if comm in contracts_by_commodity and code not in contracts_by_commodity[comm]:
-            contracts_by_commodity[comm].append(code)
+    contracts_by_commodity = _build_contracts_by_commodity(live_quotes)
 
     col_ir, col_sofr = st.columns([1, 2])
 
@@ -455,46 +519,7 @@ with st.container(border=True):
         except Exception:
             st.caption("SOFR unavailable -- using manually entered rate.")
 
-    with st.container(key="cqg_quotes_box", border=True):
-
-        if not any(contracts_by_commodity.values()):
-            st.caption("No contracts yet -- add a leg below to start one.")
-        else:
-            comm_cols = st.columns(len(contracts_by_commodity))
-
-            for comm_col, (comm, codes) in zip(comm_cols, contracts_by_commodity.items()):
-                with comm_col:
-                    st.markdown(f"**{comm.upper()}**")
-
-                    if not codes:
-                        st.caption("-")
-                        continue
-
-                    quotes_df = pd.DataFrame([
-                        {
-                            "Contract": code,
-                            "Price": float(quote_price_lookup.get(
-                                code, st.session_state.market.futures_prices.get(code, 528.75)
-                            )),
-                            "ATM IV": None,
-                        }
-                        for code in codes
-                    ])
-
-                    edited_df = st.data_editor(
-                        quotes_df,
-                        hide_index=True,
-                        width="stretch",
-                        height=38 * (len(quotes_df) + 1),
-                        disabled=["Contract", "ATM IV"],
-                        key=f"quotes_editor_{comm}",
-                        column_config={
-                            "Price": st.column_config.NumberColumn(format="%.2f", step=0.25),
-                        },
-                    )
-
-                    for _, row in edited_df.iterrows():
-                        st.session_state.market.futures_prices[row["Contract"]] = float(row["Price"])
+    _render_quotes_box()
 
     st.subheader("Add Leg")
 
