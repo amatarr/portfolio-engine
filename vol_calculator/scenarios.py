@@ -22,25 +22,26 @@ def spot_ladder(
     portfolio,
     market,
     contract=None,
-    low=-20,
-    high=20,
-    step=5
+    low=-50,
+    high=50,
+    step=10
 ):
+    """low/high/step are absolute cents moves on `contract`'s price, not percentages."""
 
     rows = []
 
     current_value = portfolio.value(market)
     base_price = market.price_for(contract)
 
-    for pct in range(low, high + step, step):
+    for cents in range(low, high + step, step):
 
-        new_price = base_price * (1 + pct / 100)
+        new_price = base_price + cents
         shocked_market = _bump_contract_price(market, contract, new_price)
 
         value = portfolio.value(shocked_market)
 
         rows.append({
-            "Spot Move %": pct,
+            "Spot Move (¢)": cents,
             "Futures Price": new_price,
             "PnL": value - current_value,
             "Portfolio Value": value,

@@ -893,9 +893,9 @@ with tabs[1]:
     fs_contract = _contract_selector("fs_ladders") if has_positions else None
 
     c1, c2, c3 = st.columns(3)
-    spot_low = c1.number_input("Low %", value=-15, step=1, key="spot_low")
-    spot_high = c2.number_input("High %", value=15, step=1, key="spot_high")
-    spot_step = c3.number_input("Step %", value=3, step=1, key="spot_step")
+    spot_low = c1.number_input("Low (¢)", value=-50, step=5, key="spot_low")
+    spot_high = c2.number_input("High (¢)", value=50, step=5, key="spot_high")
+    spot_step = c3.number_input("Step (¢)", value=10, step=5, key="spot_step")
 
     if fs_contract:
         ladder = spot_ladder(
