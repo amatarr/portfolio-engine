@@ -462,14 +462,22 @@ def _render_quotes_box():
                         code, st.session_state.market.futures_prices.get(code, 528.75)
                     )
 
+                prices = [float(_price_for(code)) for code in codes]
+
                 quotes_df = pd.DataFrame([
-                    {
-                        "Contract": code,
-                        "Price": float(_price_for(code)),
-                        "ATM IV": None,
-                    }
-                    for code in codes
+                    {"Contract": code, "Price": price, "ATM IV": None}
+                    for code, price in zip(codes, prices)
                 ])
+
+                # st.data_editor only uses its dataframe as a *default on
+                # first creation* for a given key -- it does NOT re-sync to
+                # new values on later reruns with the same key (confirmed:
+                # forcing a new price into session_state had zero effect on
+                # what was displayed). Folding the current prices into the
+                # key forces Streamlit to treat a real change as a new
+                # widget, so live ticks and locked/pinned prices actually
+                # show up instead of freezing at whatever first rendered.
+                price_signature = "_".join(f"{p:.4f}" for p in prices)
 
                 edited_df = st.data_editor(
                     quotes_df,
@@ -477,7 +485,7 @@ def _render_quotes_box():
                     width="stretch",
                     height=38 * (len(quotes_df) + 1),
                     disabled=["Contract", "ATM IV"],
-                    key=f"quotes_editor_{comm}",
+                    key=f"quotes_editor_{comm}_{price_signature}",
                     column_config={
                         "Price": st.column_config.NumberColumn(format="%.2f", step=0.25),
                     },
@@ -714,7 +722,12 @@ with st.container(border=True):
                         for instrument, meta in imported:
                             st.session_state.portfolio.add(instrument)
                             st.session_state.position_meta.append(meta)
-                            if meta.get("settlement_price") is not None:
+                            # Only a Future leg's settlement_price is the
+                            # underlying contract's own price -- an Option
+                            # leg's settlement_price is that option's own
+                            # premium, a completely different number, and
+                            # must never overwrite the underlying price.
+                            if isinstance(instrument, Future) and meta.get("settlement_price") is not None:
                                 st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
                                 st.session_state.csv_locked_contracts.add(meta["contract"])
                         _autosave_portfolio()
