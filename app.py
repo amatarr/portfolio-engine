@@ -453,12 +453,19 @@ def _render_quotes_box():
                     st.caption("-")
                     continue
 
+                def _price_for(code):
+                    if code in st.session_state.csv_locked_contracts:
+                        # Pinned to the Daily Prop CSV's own settlement
+                        # price -- the live feed never overrides this.
+                        return st.session_state.market.futures_prices.get(code, 528.75)
+                    return quote_price_lookup.get(
+                        code, st.session_state.market.futures_prices.get(code, 528.75)
+                    )
+
                 quotes_df = pd.DataFrame([
                     {
                         "Contract": code,
-                        "Price": float(quote_price_lookup.get(
-                            code, st.session_state.market.futures_prices.get(code, 528.75)
-                        )),
+                        "Price": float(_price_for(code)),
                         "ATM IV": None,
                     }
                     for code in codes
@@ -485,6 +492,12 @@ if "portfolio" not in st.session_state:
 
 if "position_meta" not in st.session_state:
     st.session_state.position_meta = []
+
+# Contracts whose price should stay pinned to a Daily Prop CSV's own
+# settlement price, not get pulled back to the live feed -- populated at
+# Bushel-import time.
+if "csv_locked_contracts" not in st.session_state:
+    st.session_state.csv_locked_contracts = set()
 
 # Starting point for the deployed site, which has no CQGXL file to read --
 # snapshot of the contracts/prices from the local sheet, editable afterward.
@@ -643,6 +656,7 @@ with st.container(border=True):
             if st.button("Clear Portfolio"):
                 st.session_state.portfolio = Portfolio()
                 st.session_state.position_meta = []
+                st.session_state.csv_locked_contracts = set()
                 _autosave_portfolio()
                 st.rerun()
 
@@ -702,6 +716,7 @@ with st.container(border=True):
                             st.session_state.position_meta.append(meta)
                             if meta.get("settlement_price") is not None:
                                 st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
+                                st.session_state.csv_locked_contracts.add(meta["contract"])
                         _autosave_portfolio()
                         st.success(f"Added {len(imported)} imported position(s)")
                         st.rerun()
