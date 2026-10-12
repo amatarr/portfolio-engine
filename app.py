@@ -367,6 +367,32 @@ def _download_df_button(df, label, filename):
     st.download_button(label, data=df.to_csv().encode("utf-8"), file_name=filename, mime="text/csv")
 
 
+def _format_last_updated(dt):
+    """
+    Seconds/minutes while recent, hours+minutes once past an hour,
+    "Yesterday at HH:MM" for a 1-2 day gap, and the exact date beyond
+    that -- so a stale feed reads as increasingly alarming instead of
+    just a climbing raw second count.
+    """
+
+    seconds = int((datetime.now(timezone.utc) - dt).total_seconds())
+
+    if seconds < 60:
+        return f"{seconds}s ago"
+
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+
+    if seconds < 86400:
+        hours, minutes = divmod(seconds // 60, 60)
+        return f"{hours}h {minutes}m ago"
+
+    if seconds < 2 * 86400:
+        return f"Yesterday at {dt.strftime('%H:%M UTC')}"
+
+    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
 def _build_contracts_by_commodity(live_quotes):
     """
     Groups known contracts by commodity -- live quotes first, then any
@@ -413,8 +439,7 @@ def _render_quotes_box():
             latest = max(timestamps)
             try:
                 dt = datetime.fromisoformat(latest)
-                age_seconds = int((datetime.now(timezone.utc) - dt).total_seconds())
-                st.caption(f"Last updated: {dt.strftime('%Y-%m-%d %H:%M:%S UTC')} ({age_seconds}s ago)")
+                st.caption(f"Last updated: {_format_last_updated(dt)}")
             except ValueError:
                 st.caption(f"Last updated: {latest}")
 
