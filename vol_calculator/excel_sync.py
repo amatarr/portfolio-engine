@@ -62,7 +62,7 @@ def write_dataframe(ws, df, start_row=1, start_col=1, label=None, include_index=
 
 POSITIONS_HEADERS = [
     "Contract", "Commodity", "Type", "Quantity",
-    "Strike", "Expiry (d)", "Vol (%)", "Settlement Price",
+    "Strike", "Expiry (d)", "Vol (%)", "Settlement Price", "Source",
 ]
 
 FUTURE_SPOT_LABEL_CELL = "A10"
@@ -145,6 +145,124 @@ def read_interest_rate(ws, fallback_rate=0.039, value_cell=INTEREST_RATE_VALUE_C
         return fallback_rate
 
 
+# Column J onward -- deliberately outside columns 1-9 that
+# write_positions_table's clear_range touches, so this block survives
+# every refresh regardless of how many Positions rows there are.
+ADD_LEG_LABEL_CELL = "J13"
+ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL = "J14", "K14"
+ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL = "J15", "K15"
+ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL = "J16", "K16"
+ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL = "J17", "K17"
+ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL = "J18", "K18"
+ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL = "J19", "K19"
+ADD_LEG_STATUS_CELL = "J20"
+
+ADD_LEG_TYPES = ["Future", "American Option"]
+
+
+def write_add_leg_block(ws, contracts):
+    """Add Leg input cells + dropdowns -- v1 covers Future and American Option only (the only types real Daily Prop data ever contains)."""
+
+    ws[ADD_LEG_LABEL_CELL] = "ADD LEG"
+    ws[ADD_LEG_TYPE_LABEL_CELL] = "Type:"
+    ws[ADD_LEG_CONTRACT_LABEL_CELL] = "Contract:"
+    ws[ADD_LEG_QUANTITY_LABEL_CELL] = "Quantity:"
+    ws[ADD_LEG_STRIKE_LABEL_CELL] = "Strike (blank for Future):"
+    ws[ADD_LEG_EXPIRY_LABEL_CELL] = "Expiry d (blank=auto):"
+    ws[ADD_LEG_VOL_LABEL_CELL] = "Vol % (blank for Future):"
+
+    if ws[ADD_LEG_TYPE_VALUE_CELL].value not in ADD_LEG_TYPES:
+        ws[ADD_LEG_TYPE_VALUE_CELL] = ADD_LEG_TYPES[0]
+
+    type_dv = DataValidation(type="list", formula1=f'"{",".join(ADD_LEG_TYPES)}"', allow_blank=False)
+    ws.add_data_validation(type_dv)
+    type_dv.add(ws[ADD_LEG_TYPE_VALUE_CELL])
+
+    if contracts:
+        if ws[ADD_LEG_CONTRACT_VALUE_CELL].value not in contracts:
+            ws[ADD_LEG_CONTRACT_VALUE_CELL] = contracts[0]
+
+        contract_dv = DataValidation(type="list", formula1=f'"{",".join(contracts)}"', allow_blank=False)
+        ws.add_data_validation(contract_dv)
+        contract_dv.add(ws[ADD_LEG_CONTRACT_VALUE_CELL])
+
+
+def read_add_leg_inputs(ws):
+    return {
+        "type": ws[ADD_LEG_TYPE_VALUE_CELL].value,
+        "contract": ws[ADD_LEG_CONTRACT_VALUE_CELL].value,
+        "quantity": ws[ADD_LEG_QUANTITY_VALUE_CELL].value,
+        "strike": ws[ADD_LEG_STRIKE_VALUE_CELL].value,
+        "expiry_days": ws[ADD_LEG_EXPIRY_VALUE_CELL].value,
+        "vol_pct": ws[ADD_LEG_VOL_VALUE_CELL].value,
+    }
+
+
+def clear_add_leg_inputs(ws):
+    for cell in (
+        ADD_LEG_QUANTITY_VALUE_CELL, ADD_LEG_STRIKE_VALUE_CELL,
+        ADD_LEG_EXPIRY_VALUE_CELL, ADD_LEG_VOL_VALUE_CELL,
+    ):
+        ws[cell] = None
+
+
+def build_manual_row(inputs, commodity_lookup, auto_expiry_fn):
+    """
+    Validates Add Leg's raw input dict and turns it into a POSITIONS_
+    HEADERS-shaped {header: value} row, Source="Manual". Raises ValueError
+    with a human-readable message on anything missing/invalid -- the
+    caller is expected to surface that directly (e.g. write it into a
+    status cell), not crash the whole refresh.
+
+    commodity_lookup: contract -> commodity, e.g. app.py's
+    _commodity_from_contract. auto_expiry_fn: contract -> approx expiry
+    days, e.g. vol_calculator.contracts.approx_option_expiry_days --
+    used only when expiry_days is left blank for an option.
+    """
+
+    leg_type = inputs.get("type")
+    contract = inputs.get("contract")
+
+    if leg_type not in ADD_LEG_TYPES:
+        raise ValueError(f"Pick a Type ({'/'.join(ADD_LEG_TYPES)}).")
+    if not contract:
+        raise ValueError("Pick a Contract.")
+
+    quantity = inputs.get("quantity")
+    if quantity in (None, ""):
+        raise ValueError("Quantity is required.")
+
+    commodity = commodity_lookup(contract)
+
+    if leg_type == "Future":
+        return {
+            "Contract": contract, "Commodity": commodity, "Type": "Future",
+            "Quantity": float(quantity), "Strike": None, "Expiry (d)": None,
+            "Vol (%)": None, "Settlement Price": None, "Source": "Manual",
+        }
+
+    strike = inputs.get("strike")
+    vol_pct = inputs.get("vol_pct")
+
+    if strike in (None, ""):
+        raise ValueError("Strike is required for American Option.")
+    if vol_pct in (None, ""):
+        raise ValueError("Vol (%) is required for American Option.")
+
+    expiry_days = inputs.get("expiry_days")
+    if expiry_days in (None, ""):
+        expiry_days = auto_expiry_fn(contract)
+        if expiry_days is None:
+            raise ValueError("Couldn't auto-compute Expiry -- enter it manually.")
+
+    return {
+        "Contract": contract, "Commodity": commodity, "Type": "Call",
+        "Quantity": float(quantity), "Strike": float(strike),
+        "Expiry (d)": int(expiry_days), "Vol (%)": float(vol_pct),
+        "Settlement Price": None, "Source": "Manual",
+    }
+
+
 def contracts_from_imported(imported):
     """Distinct contracts, in order of first appearance."""
 
@@ -172,12 +290,12 @@ def prices_from_imported(imported):
     return prices
 
 
-def _position_row(instrument, meta):
+def _position_row(instrument, meta, source):
 
     if isinstance(instrument, Future):
         return [
             meta["contract"], meta["commodity"], "Future", instrument.quantity,
-            None, None, meta.get("vol_pct"), meta.get("settlement_price"),
+            None, None, meta.get("vol_pct"), meta.get("settlement_price"), source,
         ]
 
     if isinstance(instrument, AmericanOption):
@@ -185,28 +303,87 @@ def _position_row(instrument, meta):
             meta["contract"], meta["commodity"],
             "Call" if instrument.option_type == "call" else "Put",
             instrument.quantity, instrument.strike, instrument.expiry_days,
-            round(instrument.volatility * 100, 2), meta.get("settlement_price"),
+            round(instrument.volatility * 100, 2), meta.get("settlement_price"), source,
         ]
 
     raise TypeError(f"Unsupported instrument type: {type(instrument)}")
 
 
-def write_positions_table(ws, imported, start_row=11, clear_rows=500):
+def _row_to_instrument(row):
+    """
+    Inverse of _position_row -- turns a {header: value} dict (as read back
+    by read_positions_rows) into an (instrument, meta) pair, same shape
+    import_bushel_positions produces. Used to fold Manual rows back into
+    the Portfolio the engine computes against, not just display them.
+    """
+
+    contract = row.get("Contract")
+    commodity = row.get("Commodity")
+    leg_type = row.get("Type")
+    quantity = float(row.get("Quantity") or 0)
+
+    if leg_type == "Future":
+        instrument = Future(quantity=quantity, contract=contract)
+    elif leg_type in ("Call", "Put"):
+        instrument = AmericanOption(
+            quantity=quantity,
+            strike=float(row["Strike"]),
+            expiry_days=int(row["Expiry (d)"]),
+            option_type="call" if leg_type == "Call" else "put",
+            volatility=float(row.get("Vol (%)") or 0) / 100,
+            contract=contract,
+        )
+    else:
+        raise ValueError(f"Unknown Type in Positions row: {leg_type!r}")
+
+    meta = {
+        "commodity": commodity, "contract": contract,
+        "vol_pct": None, "settlement_price": row.get("Settlement Price"),
+    }
+    return instrument, meta
+
+
+def read_positions_rows(ws, start_row=13):
+    """
+    Reads the Positions table back as a list of {header: value} dicts --
+    stops at the first row with no Contract value. Returns [] if the
+    table doesn't look like POSITIONS_HEADERS yet (nothing written, or
+    unexpected layout).
+    """
+
+    header_row = start_row + 1
+    headers = [ws.cell(row=header_row, column=c).value for c in range(1, len(POSITIONS_HEADERS) + 1)]
+
+    if headers != POSITIONS_HEADERS:
+        return []
+
+    rows = []
+    r = header_row + 1
+
+    while ws.cell(row=r, column=1).value is not None:
+        rows.append({h: ws.cell(row=r, column=c + 1).value for c, h in enumerate(POSITIONS_HEADERS)})
+        r += 1
+
+    return rows
+
+
+def write_positions_table(ws, imported, extra_rows=None, start_row=13, clear_rows=500):
     """
     Writes (instrument, meta) pairs -- the same shape import_bushel_positions
-    returns -- into an existing worksheet, starting at start_row (a
-    "POSITIONS" label, then headers, then one row per leg). Clears a
-    generous range below start_row first, so a shrinking book doesn't
-    leave stale rows behind from a previous, longer day's data.
+    returns -- as "Daily Prop" rows, starting at start_row (a "POSITIONS"
+    label, then headers, then one row per leg). extra_rows (already-built
+    {header: value} dicts, typically preserved/new "Manual" rows from the
+    caller) are appended verbatim afterward, unchanged. Clears a generous
+    range below start_row first, so a shrinking book doesn't leave stale
+    rows behind from a previous, longer day's data -- this is why
+    extra_rows has to be read by the caller *before* calling this, not
+    re-derived from the sheet in here.
     """
 
+    extra_rows = extra_rows or []
     n_cols = len(POSITIONS_HEADERS)
 
-    for row in ws.iter_rows(
-        min_row=start_row, max_row=start_row + clear_rows, min_col=1, max_col=n_cols
-    ):
-        for cell in row:
-            cell.value = None
+    clear_range(ws, min_row=start_row, max_row=start_row + clear_rows, min_col=1, max_col=n_cols)
 
     ws.cell(row=start_row, column=1, value="POSITIONS")
 
@@ -214,10 +391,18 @@ def write_positions_table(ws, imported, start_row=11, clear_rows=500):
     for col, header in enumerate(POSITIONS_HEADERS, start=1):
         ws.cell(row=header_row, column=col, value=header)
 
-    for i, (instrument, meta) in enumerate(imported):
-        row_values = _position_row(instrument, meta)
+    row_idx = header_row + 1
+
+    for instrument, meta in imported:
+        row_values = _position_row(instrument, meta, source="Daily Prop")
         for col, value in enumerate(row_values, start=1):
-            ws.cell(row=header_row + 1 + i, column=col, value=value)
+            ws.cell(row=row_idx, column=col, value=value)
+        row_idx += 1
+
+    for extra in extra_rows:
+        for col, header in enumerate(POSITIONS_HEADERS, start=1):
+            ws.cell(row=row_idx, column=col, value=extra.get(header))
+        row_idx += 1
 
     return ws
 

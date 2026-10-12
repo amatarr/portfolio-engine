@@ -16,6 +16,14 @@ from vol_calculator.excel_sync import (
     INTEREST_RATE_VALUE_CELL,
     SOFR_CAPTION_CELL,
     POSITIONS_HEADERS,
+    ADD_LEG_LABEL_CELL,
+    ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL,
+    ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL,
+    ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL,
+    ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL,
+    ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL,
+    ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL,
+    ADD_LEG_TYPES,
     _position_row,
     _round_greek,
 )
@@ -34,6 +42,50 @@ from vol_calculator.scenarios import (
 _XL_VALIDATE_LIST = 3
 
 
+def xw_reset_dropdown_validations(sheet):
+    """
+    Wipes every data-validation rule on the sheet. Repeated automated
+    Delete()+Add() cycles targeting just one cell, across many refreshes,
+    corrupt a sheet's internal validation state until every subsequent
+    Add() silently fails, even on an untouched cell -- so the reset has
+    to cover the whole sheet, and has to happen exactly once per refresh,
+    before any of this module's dropdown-writing functions run (they no
+    longer wipe individually).
+    """
+
+    try:
+        sheet.api.Cells.Validation.Delete()
+    except Exception:
+        pass
+
+
+def _add_list_validation(cell, items):
+    """
+    Best-effort: adds a list-type data validation dropdown to a cell.
+    AlertStyle/Operator have no real effect for a list-type validation,
+    but must be passed explicitly -- omitting them (relying on COM to
+    fill in VBA's optional-argument defaults) fails when called this way,
+    through raw COM dispatch rather than from inside VBA itself.
+
+    Wrapped in try/except: the sheet's validation state can get corrupted
+    by Excel/COM itself after enough Delete()+Add() cycles in one running
+    session (confirmed: even Add() on a brand-new, never-validated cell
+    starts failing once this happens) -- not something further automated
+    Delete()/Add() calls can repair; it clears on its own when the
+    workbook/Excel is closed and reopened. A dropdown failing to (re)build
+    is cosmetic -- it must never take down the rest of the refresh (Greeks,
+    Positions, ladders, etc. all still need to write), so this swallows
+    the error rather than raising.
+    """
+
+    try:
+        cell.api.Validation.Add(
+            Type=_XL_VALIDATE_LIST, AlertStyle=1, Operator=1, Formula1=",".join(items)
+        )
+    except Exception:
+        pass
+
+
 def xw_write_future_spot_selector(sheet, contracts):
 
     sheet[FUTURE_SPOT_LABEL_CELL].value = "Future Spot:"
@@ -46,23 +98,9 @@ def xw_write_future_spot_selector(sheet, contracts):
     if value_cell.value not in contracts:
         value_cell.value = contracts[0]
 
-    # Clearing just this one cell's validation isn't enough -- repeated
-    # automated Delete()+Add() cycles on the same cell can corrupt a
-    # sheet's internal validation state until every subsequent Add()
-    # silently fails, even on an untouched cell. Wiping the whole
-    # sheet's validation first resets that reliably.
-    try:
-        sheet.api.Cells.Validation.Delete()
-    except Exception:
-        pass
-
-    # AlertStyle/Operator have no real effect for a list-type validation,
-    # but must be passed explicitly -- omitting them (relying on COM to
-    # fill in VBA's optional-argument defaults) fails when called this
-    # way, through raw COM dispatch rather than from inside VBA itself.
-    value_cell.api.Validation.Add(
-        Type=_XL_VALIDATE_LIST, AlertStyle=1, Operator=1, Formula1=",".join(contracts)
-    )
+    # Caller must have already run xw_reset_dropdown_validations() once
+    # this refresh -- see that function's docstring for why.
+    _add_list_validation(value_cell, contracts)
 
 
 def xw_read_future_spot(sheet, contracts):
@@ -99,7 +137,35 @@ def xw_read_interest_rate(sheet, fallback_rate=0.039):
         return fallback_rate
 
 
-def xw_write_positions_table(sheet, imported, start_row=13, clear_rows=500):
+def xw_read_positions_rows(sheet, start_row=13, max_rows=500):
+    """Live-sheet equivalent of excel_sync.read_positions_rows -- reads the Positions table back as a list of {header: value} dicts."""
+
+    header_row = start_row + 1
+    n_cols = len(POSITIONS_HEADERS)
+
+    header_values = sheet.range((header_row, 1), (header_row, n_cols)).value
+    if header_values != POSITIONS_HEADERS:
+        return []
+
+    data_block = sheet.range((header_row + 1, 1), (header_row + max_rows, n_cols)).value
+
+    rows = []
+    for raw_row in data_block:
+        if not raw_row or raw_row[0] in (None, ""):
+            break
+        rows.append(dict(zip(POSITIONS_HEADERS, raw_row)))
+
+    return rows
+
+
+def xw_write_positions_table(sheet, imported, extra_rows=None, start_row=13, clear_rows=500):
+    """
+    Live-sheet equivalent of excel_sync.write_positions_table -- see that
+    function's docstring. extra_rows (already-built row dicts, e.g.
+    Manual-sourced legs read back via xw_read_positions_rows beforehand)
+    must be supplied by the caller: this clears the whole range first, so
+    it can't read "what to keep" off the sheet itself.
+    """
 
     n_cols = len(POSITIONS_HEADERS)
 
@@ -111,9 +177,53 @@ def xw_write_positions_table(sheet, imported, start_row=13, clear_rows=500):
     header_row = start_row + 1
     sheet.range((header_row, 1)).value = POSITIONS_HEADERS
 
-    if imported:
-        rows = [_position_row(instrument, meta) for instrument, meta in imported]
+    rows = [_position_row(instrument, meta, source="Daily Prop") for instrument, meta in (imported or [])]
+    rows += [[row.get(h) for h in POSITIONS_HEADERS] for row in (extra_rows or [])]
+
+    if rows:
         sheet.range((header_row + 1, 1)).value = rows
+
+
+def xw_write_add_leg_block(sheet, contracts):
+    """Add Leg input cells + dropdowns -- live mirror of excel_sync.write_add_leg_block. Caller must have run xw_reset_dropdown_validations() once this refresh first."""
+
+    sheet[ADD_LEG_LABEL_CELL].value = "ADD LEG"
+    sheet[ADD_LEG_TYPE_LABEL_CELL].value = "Type:"
+    sheet[ADD_LEG_CONTRACT_LABEL_CELL].value = "Contract:"
+    sheet[ADD_LEG_QUANTITY_LABEL_CELL].value = "Quantity:"
+    sheet[ADD_LEG_STRIKE_LABEL_CELL].value = "Strike (blank for Future):"
+    sheet[ADD_LEG_EXPIRY_LABEL_CELL].value = "Expiry d (blank=auto):"
+    sheet[ADD_LEG_VOL_LABEL_CELL].value = "Vol % (blank for Future):"
+
+    type_cell = sheet[ADD_LEG_TYPE_VALUE_CELL]
+    if type_cell.value not in ADD_LEG_TYPES:
+        type_cell.value = ADD_LEG_TYPES[0]
+    _add_list_validation(type_cell, ADD_LEG_TYPES)
+
+    if contracts:
+        contract_cell = sheet[ADD_LEG_CONTRACT_VALUE_CELL]
+        if contract_cell.value not in contracts:
+            contract_cell.value = contracts[0]
+        _add_list_validation(contract_cell, contracts)
+
+
+def xw_read_add_leg_inputs(sheet):
+    return {
+        "type": sheet[ADD_LEG_TYPE_VALUE_CELL].value,
+        "contract": sheet[ADD_LEG_CONTRACT_VALUE_CELL].value,
+        "quantity": sheet[ADD_LEG_QUANTITY_VALUE_CELL].value,
+        "strike": sheet[ADD_LEG_STRIKE_VALUE_CELL].value,
+        "expiry_days": sheet[ADD_LEG_EXPIRY_VALUE_CELL].value,
+        "vol_pct": sheet[ADD_LEG_VOL_VALUE_CELL].value,
+    }
+
+
+def xw_clear_add_leg_inputs(sheet):
+    for cell in (
+        ADD_LEG_QUANTITY_VALUE_CELL, ADD_LEG_STRIKE_VALUE_CELL,
+        ADD_LEG_EXPIRY_VALUE_CELL, ADD_LEG_VOL_VALUE_CELL,
+    ):
+        sheet[cell].value = None
 
 
 def xw_write_greeks_sheet(sheet, portfolio, market, contracts, clear_rows=500):

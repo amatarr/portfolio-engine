@@ -50,6 +50,17 @@ def multiplier_for(commodity):
     return COMMODITIES[commodity]["multiplier"]
 
 
+def commodity_from_contract(contract, fallback="Unknown"):
+    if not contract:
+        return fallback
+
+    for name, info in COMMODITIES.items():
+        if contract.startswith(info["symbol"]):
+            return name
+
+    return fallback
+
+
 def approx_option_expiry_days(contract, today=None):
     """
     Rough stand-in for a grain option's real expiry date. CME's actual

@@ -38,10 +38,12 @@ from vol_calculator.contracts import (
     contract_code,
     multiplier_for,
     approx_option_expiry_days,
+    commodity_from_contract,
 )
 from vol_calculator.bushel_import import import_bushel_positions, latest_daily_prop_file
 from vol_calculator.excel_sync import (
     write_positions_table,
+    read_positions_rows,
     write_greeks_sheet,
     write_spot_vol_ladder_sheet,
     write_heat_maps_sheet,
@@ -58,6 +60,11 @@ from vol_calculator.excel_sync import (
     contracts_from_imported,
     prices_from_imported,
     POSITIONS_HEADERS,
+    write_add_leg_block,
+    read_add_leg_inputs,
+    clear_add_leg_inputs,
+    build_manual_row,
+    ADD_LEG_STATUS_CELL,
 )
 from vol_calculator.cqg_quotes import import_cqg_quotes
 from vol_calculator.structures import (
@@ -110,9 +117,16 @@ __all__ = [
     "contract_code",
     "multiplier_for",
     "approx_option_expiry_days",
+    "commodity_from_contract",
     "import_bushel_positions",
     "latest_daily_prop_file",
     "write_positions_table",
+    "read_positions_rows",
+    "write_add_leg_block",
+    "read_add_leg_inputs",
+    "clear_add_leg_inputs",
+    "build_manual_row",
+    "ADD_LEG_STATUS_CELL",
     "write_greeks_sheet",
     "write_spot_vol_ladder_sheet",
     "write_heat_maps_sheet",
