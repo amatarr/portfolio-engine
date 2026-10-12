@@ -455,10 +455,11 @@ def _render_quotes_box():
                     continue
 
                 def _price_for(code):
-                    if code in st.session_state.csv_locked_contracts:
-                        # Pinned to the Daily Prop CSV's own settlement
-                        # price -- the live feed never overrides this.
-                        return st.session_state.market.futures_prices.get(code, 528.75)
+                    # This box always shows the live feed, regardless of
+                    # whether the contract's calc price is pinned to a
+                    # Daily Prop CSV settlement -- the pin only affects
+                    # the Positions table/engine, never what's displayed
+                    # here.
                     return quote_price_lookup.get(
                         code, st.session_state.market.futures_prices.get(code, 528.75)
                     )
@@ -493,6 +494,10 @@ def _render_quotes_box():
                 )
 
                 for _, row in edited_df.iterrows():
+                    if row["Contract"] in st.session_state.csv_locked_contracts:
+                        # Pinned contract: this box is informational only
+                        # for it, never writes back into the engine's price.
+                        continue
                     st.session_state.market.futures_prices[row["Contract"]] = float(row["Price"])
 
 
