@@ -269,17 +269,17 @@ def _structure_kind(name):
     return re.sub(r"(?<!^)(?=[A-Z])", " ", kind)
 
 
-def _leg_row(leg, position_index, structure, contract, underlying_price, future_vol_pct=None):
+def _leg_row(leg, position_index, structure, contract, settlement_price, future_vol_pct=None):
 
     if isinstance(leg, Future):
         return {
-            "#": position_index, "Contract": contract, "Underlying Price": underlying_price,
+            "#": position_index, "Contract": contract, "Settlement Price": settlement_price,
             "Structure": structure, "Type": "Future",
             "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None, "Vol (%)": future_vol_pct,
         }
 
     return {
-        "#": position_index, "Contract": contract, "Underlying Price": underlying_price,
+        "#": position_index, "Contract": contract, "Settlement Price": settlement_price,
         "Structure": structure,
         "Type": "Call" if leg.option_type == "call" else "Put",
         "Quantity": leg.quantity, "Strike": leg.strike,
@@ -287,7 +287,8 @@ def _leg_row(leg, position_index, structure, contract, underlying_price, future_
     }
 
 
-def _positions_table_for_commodity(portfolio, meta, commodity, market):
+def _positions_table_for_commodity(portfolio, meta, commodity):
+    """Settlement Price is whatever was captured at import/add time (meta["settlement_price"]) -- a fixed snapshot, not tied to the live feed."""
 
     rows = []
 
@@ -297,13 +298,13 @@ def _positions_table_for_commodity(portfolio, meta, commodity, market):
             continue
 
         contract = meta[i].get("contract") or "-"
-        underlying_price = market.futures_prices.get(contract)
+        settlement_price = meta[i].get("settlement_price")
 
         if isinstance(pos, Structure):
             structure = _structure_kind(pos.name)
-            rows.extend(_leg_row(leg, i, structure, contract, underlying_price) for leg in pos.legs)
+            rows.extend(_leg_row(leg, i, structure, contract, settlement_price) for leg in pos.legs)
         else:
-            rows.append(_leg_row(pos, i, "-", contract, underlying_price, future_vol_pct=meta[i].get("vol_pct")))
+            rows.append(_leg_row(pos, i, "-", contract, settlement_price, future_vol_pct=meta[i].get("vol_pct")))
 
     return pd.DataFrame(rows)
 
@@ -748,16 +749,14 @@ with st.container(border=True):
 
             st.markdown(f"**{group_commodity} Positions**")
 
-            table = _positions_table_for_commodity(
-                st.session_state.portfolio, meta, group_commodity, st.session_state.market
-            )
+            table = _positions_table_for_commodity(st.session_state.portfolio, meta, group_commodity)
             selection = st.dataframe(
                 table,
                 hide_index=True,
                 width="stretch",
                 height=min(38 * (len(table) + 1), 400),
                 column_order=[
-                    "Contract", "Underlying Price", "Structure", "Type",
+                    "Contract", "Settlement Price", "Structure", "Type",
                     "Quantity", "Strike", "Expiry (d)", "Vol (%)",
                 ],
                 on_select="rerun",
