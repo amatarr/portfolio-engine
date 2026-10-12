@@ -19,7 +19,7 @@ from vol_calculator import (
     contracts_from_imported, prices_from_imported,
 )
 
-WORKBOOK_PATH = "Position_Analysis.xlsx"
+WORKBOOK_PATH = "Position_Analysis.xlsm"
 DAILY_PROP_FOLDER = "Daily prop"
 DEFAULT_INTEREST_RATE = 0.039
 
@@ -44,7 +44,9 @@ def main():
     except Exception:
         sofr = None
 
-    wb = openpyxl.load_workbook(WORKBOOK_PATH)
+    # keep_vba=True -- without it, openpyxl silently strips the macro
+    # when round-tripping an .xlsm file.
+    wb = openpyxl.load_workbook(WORKBOOK_PATH, keep_vba=True)
 
     write_future_spot_selector(wb["Home"], contracts)
     write_interest_rate_cell(wb["Home"], sofr=sofr, fallback_rate=DEFAULT_INTEREST_RATE)

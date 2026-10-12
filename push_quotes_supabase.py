@@ -16,7 +16,7 @@ from supabase import create_client
 
 from vol_calculator.cqg_quotes import _convert_cqg_symbol
 
-WORKBOOK_PATH = "Position_Analysis.xlsx"
+WORKBOOK_PATH = "Position_Analysis.xlsm"
 TABLE_NAME = "Quotes"
 PUSH_INTERVAL_SECONDS = 5
 

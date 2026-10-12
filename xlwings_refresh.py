@@ -25,7 +25,7 @@ from vol_calculator.xlwings_sync import (
     xw_write_payoff_sheet, xw_write_breakevens_sheet,
 )
 
-WORKBOOK_PATH = "Position_Analysis.xlsx"
+WORKBOOK_PATH = "Position_Analysis.xlsm"
 DAILY_PROP_FOLDER = "Daily prop"
 DEFAULT_INTEREST_RATE = 0.039
 
