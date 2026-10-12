@@ -498,6 +498,11 @@ def _render_quotes_box():
                         # Pinned contract: this box is informational only
                         # for it, never writes back into the engine's price.
                         continue
+                    if row["Contract"] not in quote_price_lookup:
+                        # No live quote for this contract -- leave its
+                        # engine price exactly as-is rather than writing
+                        # back the displayed fallback value every rerun.
+                        continue
                     st.session_state.market.futures_prices[row["Contract"]] = float(row["Price"])
 
 
