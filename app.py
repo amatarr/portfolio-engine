@@ -1,5 +1,6 @@
 import re
 import tempfile
+from datetime import datetime, timezone
 
 import matplotlib
 matplotlib.use("Agg")
@@ -101,6 +102,7 @@ def _fetch_supabase_quotes(url, anon_key):
             "commodity": _commodity_from_contract(row["contract"]),
             "contract": row["contract"],
             "price": row["price"],
+            "updated_at": row.get("updated_at"),
         }
         for row in resp.data
     ]
@@ -406,6 +408,16 @@ def _render_quotes_box():
             st.caption("No contracts yet -- add a leg below to start one.")
             return
 
+        timestamps = [q["updated_at"] for q in live_quotes if q.get("updated_at")]
+        if timestamps:
+            latest = max(timestamps)
+            try:
+                dt = datetime.fromisoformat(latest)
+                age_seconds = int((datetime.now(timezone.utc) - dt).total_seconds())
+                st.caption(f"Last updated: {dt.strftime('%Y-%m-%d %H:%M:%S UTC')} ({age_seconds}s ago)")
+            except ValueError:
+                st.caption(f"Last updated: {latest}")
+
         comm_cols = st.columns(len(contracts_by_commodity))
 
         for comm_col, (comm, codes) in zip(comm_cols, contracts_by_commodity.items()):
@@ -501,10 +513,13 @@ with st.container(border=True):
 
     col_ir, col_sofr = st.columns([1, 2])
 
-    interest_rate_pct = col_ir.number_input(
-        "Interest Rate (%)", value=float(st.session_state.market.interest_rate) * 100,
-        step=0.01, format="%.2f",
-    )
+    with col_ir:
+        ir_label_col, ir_value_col = st.columns([1, 1])
+        ir_label_col.markdown("Interest Rate (%)")
+        interest_rate_pct = ir_value_col.number_input(
+            "Interest Rate (%)", value=float(st.session_state.market.interest_rate) * 100,
+            step=0.01, format="%.2f", label_visibility="collapsed",
+        )
     st.session_state.market.interest_rate = interest_rate_pct / 100
 
     with col_sofr:
@@ -525,20 +540,26 @@ with st.container(border=True):
 
     all_contracts = [c for codes in contracts_by_commodity.values() for c in codes]
 
-    col_type, col_contract = st.columns([1, 1])
+    type_label_col, type_sel_col, contract_label_col, contract_sel_col = st.columns([0.5, 1, 0.7, 1.3])
 
-    leg_type = col_type.selectbox("Type", list(LEG_BUILDERS.keys()))
+    type_label_col.markdown("Type")
+    leg_type = type_sel_col.selectbox(
+        "Type", list(LEG_BUILDERS.keys()), label_visibility="collapsed"
+    )
     spec = LEG_BUILDERS[leg_type]
 
+    contract_label_col.markdown("Contract")
+
     if not all_contracts:
-        col_contract.warning("No contracts available -- set a price in Market above first.")
+        contract_sel_col.warning("No contracts -- set a price in Market above first.")
         current_contract = None
         auto_expiry = None
         underlying_price = None
     else:
-        current_contract = col_contract.selectbox(
+        current_contract = contract_sel_col.selectbox(
             "Contract", all_contracts,
             format_func=lambda c: f"{_commodity_from_contract(c)} -- {c}",
+            label_visibility="collapsed",
         )
         underlying_price = st.session_state.market.futures_prices.get(current_contract)
         auto_expiry = approx_option_expiry_days(current_contract)
