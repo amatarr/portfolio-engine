@@ -19,11 +19,12 @@ from vol_calculator.excel_sync import (
     ADD_LEG_LABEL_CELL,
     ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL,
     ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL,
+    ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL,
     ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL,
     ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL,
     ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL,
     ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL,
-    ADD_LEG_TYPES,
+    ADD_LEG_TYPES, ADD_LEG_OPTION_TYPES,
     _position_row,
     _round_greek,
 )
@@ -227,6 +228,7 @@ def xw_write_add_leg_block(sheet, contracts):
     sheet[ADD_LEG_LABEL_CELL].value = "ADD LEG"
     sheet[ADD_LEG_TYPE_LABEL_CELL].value = "Type:"
     sheet[ADD_LEG_CONTRACT_LABEL_CELL].value = "Contract:"
+    sheet[ADD_LEG_OPTION_TYPE_LABEL_CELL].value = "Call/Put (ignored for Future):"
     sheet[ADD_LEG_QUANTITY_LABEL_CELL].value = "Quantity:"
     sheet[ADD_LEG_STRIKE_LABEL_CELL].value = "Strike (blank for Future):"
     sheet[ADD_LEG_EXPIRY_LABEL_CELL].value = "Expiry d (blank=auto):"
@@ -236,6 +238,11 @@ def xw_write_add_leg_block(sheet, contracts):
     if type_cell.value not in ADD_LEG_TYPES:
         type_cell.value = ADD_LEG_TYPES[0]
     _add_list_validation(type_cell, ADD_LEG_TYPES)
+
+    option_type_cell = sheet[ADD_LEG_OPTION_TYPE_VALUE_CELL]
+    if option_type_cell.value not in ADD_LEG_OPTION_TYPES:
+        option_type_cell.value = ADD_LEG_OPTION_TYPES[0]
+    _add_list_validation(option_type_cell, ADD_LEG_OPTION_TYPES)
 
     if contracts:
         contract_cell = sheet[ADD_LEG_CONTRACT_VALUE_CELL]
@@ -248,6 +255,7 @@ def xw_read_add_leg_inputs(sheet):
     return {
         "type": sheet[ADD_LEG_TYPE_VALUE_CELL].value,
         "contract": sheet[ADD_LEG_CONTRACT_VALUE_CELL].value,
+        "option_type": sheet[ADD_LEG_OPTION_TYPE_VALUE_CELL].value,
         "quantity": sheet[ADD_LEG_QUANTITY_VALUE_CELL].value,
         "strike": sheet[ADD_LEG_STRIKE_VALUE_CELL].value,
         "expiry_days": sheet[ADD_LEG_EXPIRY_VALUE_CELL].value,

@@ -151,13 +151,15 @@ def read_interest_rate(ws, fallback_rate=0.039, value_cell=INTEREST_RATE_VALUE_C
 ADD_LEG_LABEL_CELL = "J13"
 ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL = "J14", "K14"
 ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL = "J15", "K15"
-ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL = "J16", "K16"
-ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL = "J17", "K17"
-ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL = "J18", "K18"
-ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL = "J19", "K19"
-ADD_LEG_STATUS_CELL = "J20"
+ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL = "J16", "K16"
+ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL = "J17", "K17"
+ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL = "J18", "K18"
+ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL = "J19", "K19"
+ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL = "J20", "K20"
+ADD_LEG_STATUS_CELL = "J21"
 
 ADD_LEG_TYPES = ["Future", "American Option"]
+ADD_LEG_OPTION_TYPES = ["Call", "Put"]
 
 
 def write_add_leg_block(ws, contracts):
@@ -166,6 +168,7 @@ def write_add_leg_block(ws, contracts):
     ws[ADD_LEG_LABEL_CELL] = "ADD LEG"
     ws[ADD_LEG_TYPE_LABEL_CELL] = "Type:"
     ws[ADD_LEG_CONTRACT_LABEL_CELL] = "Contract:"
+    ws[ADD_LEG_OPTION_TYPE_LABEL_CELL] = "Call/Put (ignored for Future):"
     ws[ADD_LEG_QUANTITY_LABEL_CELL] = "Quantity:"
     ws[ADD_LEG_STRIKE_LABEL_CELL] = "Strike (blank for Future):"
     ws[ADD_LEG_EXPIRY_LABEL_CELL] = "Expiry d (blank=auto):"
@@ -177,6 +180,13 @@ def write_add_leg_block(ws, contracts):
     type_dv = DataValidation(type="list", formula1=f'"{",".join(ADD_LEG_TYPES)}"', allow_blank=False)
     ws.add_data_validation(type_dv)
     type_dv.add(ws[ADD_LEG_TYPE_VALUE_CELL])
+
+    if ws[ADD_LEG_OPTION_TYPE_VALUE_CELL].value not in ADD_LEG_OPTION_TYPES:
+        ws[ADD_LEG_OPTION_TYPE_VALUE_CELL] = ADD_LEG_OPTION_TYPES[0]
+
+    option_type_dv = DataValidation(type="list", formula1=f'"{",".join(ADD_LEG_OPTION_TYPES)}"', allow_blank=False)
+    ws.add_data_validation(option_type_dv)
+    option_type_dv.add(ws[ADD_LEG_OPTION_TYPE_VALUE_CELL])
 
     if contracts:
         if ws[ADD_LEG_CONTRACT_VALUE_CELL].value not in contracts:
@@ -191,6 +201,7 @@ def read_add_leg_inputs(ws):
     return {
         "type": ws[ADD_LEG_TYPE_VALUE_CELL].value,
         "contract": ws[ADD_LEG_CONTRACT_VALUE_CELL].value,
+        "option_type": ws[ADD_LEG_OPTION_TYPE_VALUE_CELL].value,
         "quantity": ws[ADD_LEG_QUANTITY_VALUE_CELL].value,
         "strike": ws[ADD_LEG_STRIKE_VALUE_CELL].value,
         "expiry_days": ws[ADD_LEG_EXPIRY_VALUE_CELL].value,
@@ -241,6 +252,10 @@ def build_manual_row(inputs, commodity_lookup, auto_expiry_fn):
             "Vol (%)": None, "Settlement Price": None, "Source": "Manual",
         }
 
+    option_type = inputs.get("option_type")
+    if option_type not in ADD_LEG_OPTION_TYPES:
+        raise ValueError(f"Pick Call or Put ({'/'.join(ADD_LEG_OPTION_TYPES)}).")
+
     strike = inputs.get("strike")
     vol_pct = inputs.get("vol_pct")
 
@@ -256,7 +271,7 @@ def build_manual_row(inputs, commodity_lookup, auto_expiry_fn):
             raise ValueError("Couldn't auto-compute Expiry -- enter it manually.")
 
     return {
-        "Contract": contract, "Commodity": commodity, "Type": "Call",
+        "Contract": contract, "Commodity": commodity, "Type": option_type,
         "Quantity": float(quantity), "Strike": float(strike),
         "Expiry (d)": int(expiry_days), "Vol (%)": float(vol_pct),
         "Settlement Price": None, "Source": "Manual",

@@ -21,6 +21,7 @@ from vol_calculator import (
     build_manual_row, ADD_LEG_STATUS_CELL,
 )
 from vol_calculator.excel_sync import _row_to_instrument
+from vol_calculator.instruments import Future
 from vol_calculator.xlwings_sync import (
     xw_reset_dropdown_validations,
     xw_write_future_spot_selector, xw_read_future_spot,
@@ -154,6 +155,15 @@ def _refresh(extra_new_row=None, keep_manual=True):
         if meta.get("settlement_price") is not None:
             market.futures_prices[meta["contract"]] = meta["settlement_price"]
 
+    # A manually-added Future leg has no settlement_price of its own
+    # (it isn't CSV-imported) -- backfill the Positions table's own
+    # column with whatever price the engine actually resolved for it
+    # (Daily Prop if it's covered, else the live CQGXL watchlist), so
+    # the row isn't left blank even though it's correctly priced.
+    for row, (instrument, meta) in zip(manual_rows, manual_instruments):
+        if isinstance(instrument, Future) and row.get("Settlement Price") is None:
+            row["Settlement Price"] = market.futures_prices.get(meta["contract"])
+
     xw_write_positions_table(home, imported, extra_rows=manual_rows, start_row=13)
 
     future_spot = xw_read_future_spot(home, portfolio_contracts)
@@ -199,9 +209,14 @@ def add_leg():
         ctypes.windll.user32.MessageBoxW(0, message, "Add Leg", 0x30)
         return
 
+    # Clear the inputs and write the success message only *after*
+    # _refresh() actually completes -- if it raises partway through
+    # (e.g. a transient Excel/COM hiccup), the typed inputs are still
+    # there to retry instead of being silently wiped with nothing saved.
+    _refresh(extra_new_row=new_row)
     xw_clear_add_leg_inputs(home)
     home[ADD_LEG_STATUS_CELL].value = f"Added {new_row['Quantity']} {new_row['Contract']} ({new_row['Type']})"
-    _refresh(extra_new_row=new_row)
+    wb.save()
 
 
 def clear_portfolio():
