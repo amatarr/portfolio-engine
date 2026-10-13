@@ -6,6 +6,8 @@ script that reads the workbook, recalculates everything in Python, and
 writes the results back, same engine as the Streamlit app.
 """
 
+import os
+
 import openpyxl
 
 from vol_calculator import (
@@ -20,7 +22,11 @@ from vol_calculator import (
 )
 
 WORKBOOK_PATH = "Position_Analysis.xlsm"
-DAILY_PROP_FOLDER = "Daily prop"
+# Anchored to this script's own folder, not whatever the caller's
+# current working directory happens to be -- see xlwings_refresh.py's
+# identical comment for why this matters.
+_PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+DAILY_PROP_FOLDER = os.path.join(_PROJECT_DIR, "Daily prop")
 DEFAULT_INTEREST_RATE = 0.039
 
 

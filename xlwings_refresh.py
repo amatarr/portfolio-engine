@@ -10,6 +10,8 @@ conditional formatting are the ones already built via openpyxl/
 refresh_excel.py and stay exactly where they are.
 """
 
+import os
+
 import xlwings as xw
 
 from vol_calculator import (
@@ -32,7 +34,14 @@ from vol_calculator.xlwings_sync import (
 )
 
 WORKBOOK_PATH = "Position_Analysis.xlsm"
-DAILY_PROP_FOLDER = "Daily prop"
+# Anchored to this script's own folder, not the current working
+# directory -- RunPython launches Python with a cwd that doesn't match
+# this project folder, so a plain relative "Daily prop" silently finds
+# nothing when triggered from an Excel button (works fine when this
+# script is run directly from a terminal already cd'd here, which is
+# why this only shows up live).
+_PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+DAILY_PROP_FOLDER = os.path.join(_PROJECT_DIR, "Daily prop")
 DEFAULT_INTEREST_RATE = 0.039
 
 
