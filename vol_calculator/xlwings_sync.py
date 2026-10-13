@@ -323,10 +323,15 @@ _ADD_LEG_ROWS = [
 def _xw_style_add_leg_block(sheet):
     """Live mirror of excel_sync._style_add_leg_block -- same colors, via COM instead of openpyxl styles."""
 
-    sheet.range("J:J").column_width = 28
-    sheet.range("K:K").column_width = 16
+    # J/K are now a deliberate empty gap between the Positions table and
+    # this block -- reset them back to a normal width in case an older
+    # refresh widened them when the block used to sit there.
+    sheet.range("J:J").column_width = 8.43
+    sheet.range("K:K").column_width = 8.43
+    sheet.range("L:L").column_width = 28
+    sheet.range("M:M").column_width = 16
 
-    header = sheet.range(f"{ADD_LEG_LABEL_CELL}:K13")
+    header = sheet.range(f"{ADD_LEG_LABEL_CELL}:M13")
     header.api.Merge()
     header.color = _ADD_LEG_HEADER_RGB
     header.api.Font.Color = 0xFFFFFF
@@ -344,7 +349,7 @@ def _xw_style_add_leg_block(sheet):
         value_range.color = _ADD_LEG_INPUT_RGB
         value_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
 
-    status = sheet.range(f"{ADD_LEG_STATUS_CELL}:K21")
+    status = sheet.range(f"{ADD_LEG_STATUS_CELL}:M21")
     status.api.Merge()
     status.color = _ADD_LEG_STATUS_RGB
     status.api.Font.Italic = True

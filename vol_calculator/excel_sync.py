@@ -175,18 +175,19 @@ def read_interest_rate(ws, fallback_rate=0.039, value_cell=INTEREST_RATE_VALUE_C
         return fallback_rate
 
 
-# Column J onward -- deliberately outside columns 1-9 that
-# write_positions_table's clear_range touches, so this block survives
-# every refresh regardless of how many Positions rows there are.
-ADD_LEG_LABEL_CELL = "J13"
-ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL = "J14", "K14"
-ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL = "J15", "K15"
-ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL = "J16", "K16"
-ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL = "J17", "K17"
-ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL = "J18", "K18"
-ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL = "J19", "K19"
-ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL = "J20", "K20"
-ADD_LEG_STATUS_CELL = "J21"
+# Column L onward -- outside columns 1-9 that write_positions_table's
+# clear_range touches (so this block survives every refresh regardless
+# of how many Positions rows there are), and leaving J/K as a deliberate
+# two-column visual gap between the Positions table and this block.
+ADD_LEG_LABEL_CELL = "L13"
+ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL = "L14", "M14"
+ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL = "L15", "M15"
+ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL = "L16", "M16"
+ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL = "L17", "M17"
+ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL = "L18", "M18"
+ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL = "L19", "M19"
+ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL = "L20", "M20"
+ADD_LEG_STATUS_CELL = "L21"
 
 ADD_LEG_TYPES = ["Future", "American Option"]
 ADD_LEG_OPTION_TYPES = ["Call", "Put"]
@@ -217,10 +218,15 @@ _ADD_LEG_ROWS = [
 
 def _style_add_leg_block(ws):
 
-    ws.column_dimensions["J"].width = 28
-    ws.column_dimensions["K"].width = 16
+    # J/K are now a deliberate empty gap between the Positions table and
+    # this block -- reset them back to a normal width in case an older
+    # refresh widened them when the block used to sit there.
+    ws.column_dimensions["J"].width = 8.43
+    ws.column_dimensions["K"].width = 8.43
+    ws.column_dimensions["L"].width = 28
+    ws.column_dimensions["M"].width = 16
 
-    ws.merge_cells(f"{ADD_LEG_LABEL_CELL}:K13")
+    ws.merge_cells(f"{ADD_LEG_LABEL_CELL}:M13")
     ws[ADD_LEG_LABEL_CELL].fill = _ADD_LEG_HEADER_FILL
     ws[ADD_LEG_LABEL_CELL].font = _ADD_LEG_HEADER_FONT
     ws[ADD_LEG_LABEL_CELL].alignment = Alignment(horizontal="center")
@@ -232,7 +238,7 @@ def _style_add_leg_block(ws):
         ws[value_cell].fill = _ADD_LEG_INPUT_FILL
         ws[value_cell].border = _ADD_LEG_THIN_BORDER
 
-    ws.merge_cells(f"{ADD_LEG_STATUS_CELL}:K21")
+    ws.merge_cells(f"{ADD_LEG_STATUS_CELL}:M21")
     ws[ADD_LEG_STATUS_CELL].fill = _ADD_LEG_STATUS_FILL
     ws[ADD_LEG_STATUS_CELL].font = _ADD_LEG_STATUS_FONT
     ws[ADD_LEG_STATUS_CELL].alignment = Alignment(wrap_text=True, vertical="center")
