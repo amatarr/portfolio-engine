@@ -12,6 +12,7 @@ ever touches values, never structure.
 from vol_calculator.excel_sync import (
     FUTURE_SPOT_LABEL_CELL,
     FUTURE_SPOT_VALUE_CELL,
+    _LIVE_QUOTES_BLOCKS, _LIVE_QUOTES_HEADER_ROW, _LIVE_QUOTES_DATA_ROWS,
     INTEREST_RATE_LABEL_CELL,
     INTEREST_RATE_VALUE_CELL,
     SOFR_CAPTION_CELL,
@@ -79,6 +80,27 @@ def xw_read_live_quotes(sheet):
             })
 
     return quotes
+
+
+_LIVE_QUOTES_HEADER_RGB = (191, 143, 0)
+
+
+def xw_style_live_quotes_watchlist(sheet):
+    """Live mirror of excel_sync.style_live_quotes_watchlist -- styling only, never touches the live RTD-linked price values themselves."""
+
+    for first_col, last_col in _LIVE_QUOTES_BLOCKS:
+        header = sheet.range((_LIVE_QUOTES_HEADER_ROW, first_col), (_LIVE_QUOTES_HEADER_ROW, last_col))
+        header.color = _LIVE_QUOTES_HEADER_RGB
+        header.api.Font.Color = 0xFFFFFF
+        header.api.Font.Bold = True
+
+        block = sheet.range((_LIVE_QUOTES_DATA_ROWS[0], first_col), (_LIVE_QUOTES_DATA_ROWS[1], last_col))
+        block.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+
+        price_col = first_col + 1
+        sheet.range(
+            (_LIVE_QUOTES_DATA_ROWS[0], price_col), (_LIVE_QUOTES_DATA_ROWS[1], price_col)
+        ).number_format = "#,##0.00"
 
 
 def xw_reset_dropdown_validations(sheet):
@@ -150,7 +172,7 @@ def xw_read_future_spot(sheet, contracts):
 
 def xw_write_interest_rate_cell(sheet, sofr=None, fallback_rate=0.039, error=None):
 
-    sheet[INTEREST_RATE_LABEL_CELL].value = "Interest Rate (%):"
+    sheet[INTEREST_RATE_LABEL_CELL].value = "IR (%):"
 
     if sofr:
         sheet[INTEREST_RATE_VALUE_CELL].value = round(sofr["rate"] * 100, 2)
@@ -158,9 +180,7 @@ def xw_write_interest_rate_cell(sheet, sofr=None, fallback_rate=0.039, error=Non
         sheet[INTEREST_RATE_VALUE_CELL].value = round(fallback_rate * 100, 2)
 
     if sofr:
-        sheet[SOFR_CAPTION_CELL].value = (
-            f"SOFR: {sofr['rate'] * 100:.2f}% (updated {sofr['effective_date']}) -- {sofr['source_url']}"
-        )
+        sheet[SOFR_CAPTION_CELL].value = f"SOFR -- last updated {sofr['effective_date']} -- {sofr['source_url']}"
     elif error:
         sheet[SOFR_CAPTION_CELL].value = f"SOFR fetch failed -- using manually entered rate. Error: {error}"
     else:
@@ -221,6 +241,57 @@ def xw_write_positions_table(sheet, imported, extra_rows=None, start_row=13, cle
 
     if rows:
         sheet.range((header_row + 1, 1)).value = rows
+
+    _xw_style_positions_table(sheet, start_row, header_row, header_row + len(rows), n_cols)
+
+
+_POSITIONS_TITLE_RGB = (55, 86, 35)
+_POSITIONS_HEADER_RGB = (226, 239, 218)
+_POSITIONS_BAND_RGB = (247, 247, 247)
+_POSITIONS_NUMBER_FORMATS = {
+    4: "#,##0.##",
+    5: "#,##0.00",
+    6: "0",
+    7: "0.00",
+    8: "#,##0.00",
+}
+
+
+def _xw_style_positions_table(sheet, start_row, header_row, last_data_row, n_cols):
+    """Live mirror of excel_sync._style_positions_table -- row-level (not cell-level) fills/borders for fewer COM round-trips."""
+
+    title = sheet.range((start_row, 1), (start_row, n_cols))
+    title.api.Merge()
+    title.color = _POSITIONS_TITLE_RGB
+    title.api.Font.Color = 0xFFFFFF
+    title.api.Font.Bold = True
+    title.api.HorizontalAlignment = -4108  # xlCenter
+
+    header = sheet.range((header_row, 1), (header_row, n_cols))
+    header.color = _POSITIONS_HEADER_RGB
+    header.api.Font.Bold = True
+    header.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+
+    for row in range(header_row + 1, last_data_row + 1):
+        row_range = sheet.range((row, 1), (row, n_cols))
+        row_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+        if (row - header_row) % 2 == 0:
+            row_range.color = _POSITIONS_BAND_RGB
+        else:
+            row_range.color = None
+
+    for col, fmt in _POSITIONS_NUMBER_FORMATS.items():
+        if last_data_row >= header_row + 1:
+            sheet.range((header_row + 1, col), (last_data_row, col)).number_format = fmt
+
+    # A shrinking table would otherwise leave stale banding below the
+    # real data -- clear a reasonable buffer of leftover formatting too.
+    buffer_range = sheet.range((last_data_row + 1, 1), (last_data_row + 50, n_cols))
+    buffer_range.color = None
+    try:
+        buffer_range.api.Borders.LineStyle = -4142  # xlLineStyleNone
+    except Exception:
+        pass
 
 
 _ADD_LEG_HEADER_RGB = (31, 78, 120)

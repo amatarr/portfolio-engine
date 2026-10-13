@@ -28,7 +28,7 @@ from vol_calculator.xlwings_sync import (
     xw_write_interest_rate_cell, xw_read_interest_rate,
     xw_write_positions_table, xw_read_positions_rows,
     xw_write_add_leg_block, xw_read_add_leg_inputs, xw_clear_add_leg_inputs,
-    xw_read_live_quotes,
+    xw_read_live_quotes, xw_style_live_quotes_watchlist,
     xw_write_greeks_sheet,
     xw_write_spot_vol_ladder_sheet, xw_write_heat_maps_sheet,
     xw_write_stress_sheet, xw_write_strike_sheet,
@@ -143,6 +143,8 @@ def _refresh(extra_new_row=None, keep_manual=True):
     for contract in live_prices:
         if contract not in add_leg_contracts:
             add_leg_contracts.append(contract)
+
+    xw_style_live_quotes_watchlist(home)
 
     xw_reset_dropdown_validations(home)
     xw_write_future_spot_selector(home, portfolio_contracts)

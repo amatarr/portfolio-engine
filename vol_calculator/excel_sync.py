@@ -69,6 +69,34 @@ POSITIONS_HEADERS = [
 FUTURE_SPOT_LABEL_CELL = "A10"
 FUTURE_SPOT_VALUE_CELL = "B10"
 
+# The live CQGXL watchlist -- rows 3-8, 3 commodity blocks (Corn A-C,
+# Soybean E-G, SRW Wheat I-J), headers on row 1. Pre-existing hand-built
+# layout, not written by any function here -- styling only, and the
+# symbol/price cells themselves (B/F/J, the live RTD-linked values) are
+# never touched, only their number format.
+_LIVE_QUOTES_BLOCKS = [(1, 3), (5, 7), (9, 10)]  # (first_col, last_col)
+_LIVE_QUOTES_HEADER_ROW = 1
+_LIVE_QUOTES_DATA_ROWS = (3, 8)
+_LIVE_QUOTES_HEADER_FILL = PatternFill(start_color="BF8F00", end_color="BF8F00", fill_type="solid")
+_LIVE_QUOTES_HEADER_FONT = Font(color="FFFFFF", bold=True, size=10)
+_LIVE_QUOTES_BORDER = Border(*(Side(style="thin", color="BF8F00"),) * 4)
+
+
+def style_live_quotes_watchlist(ws):
+
+    for first_col, last_col in _LIVE_QUOTES_BLOCKS:
+        for col in range(first_col, last_col + 1):
+            header_cell = ws.cell(row=_LIVE_QUOTES_HEADER_ROW, column=col)
+            header_cell.fill = _LIVE_QUOTES_HEADER_FILL
+            header_cell.font = _LIVE_QUOTES_HEADER_FONT
+
+        for row in range(_LIVE_QUOTES_DATA_ROWS[0], _LIVE_QUOTES_DATA_ROWS[1] + 1):
+            for col in range(first_col, last_col + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.border = _LIVE_QUOTES_BORDER
+                if col == first_col + 1:  # the price column in every block
+                    cell.number_format = "#,##0.00"
+
 
 def write_future_spot_selector(ws, contracts, label_cell=FUTURE_SPOT_LABEL_CELL, value_cell=FUTURE_SPOT_VALUE_CELL):
     """
@@ -121,7 +149,7 @@ def write_interest_rate_cell(ws, sofr=None, fallback_rate=0.039,
     failed -- falls back to fallback_rate and says so in the caption.
     """
 
-    ws[label_cell] = "Interest Rate (%):"
+    ws[label_cell] = "IR (%):"
 
     if sofr:
         ws[value_cell] = round(sofr["rate"] * 100, 2)
@@ -129,9 +157,7 @@ def write_interest_rate_cell(ws, sofr=None, fallback_rate=0.039,
         ws[value_cell] = round(fallback_rate * 100, 2)
 
     if sofr:
-        ws[caption_cell] = (
-            f"SOFR: {sofr['rate'] * 100:.2f}% (updated {sofr['effective_date']}) -- {sofr['source_url']}"
-        )
+        ws[caption_cell] = f"SOFR -- last updated {sofr['effective_date']} -- {sofr['source_url']}"
     else:
         ws[caption_cell] = "SOFR unavailable -- using manually entered rate."
 
@@ -439,6 +465,58 @@ def read_positions_rows(ws, start_row=13):
     return rows
 
 
+_POSITIONS_TITLE_FILL = PatternFill(start_color="375623", end_color="375623", fill_type="solid")
+_POSITIONS_TITLE_FONT = Font(color="FFFFFF", bold=True, size=11)
+_POSITIONS_HEADER_FILL = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+_POSITIONS_HEADER_FONT = Font(bold=True, size=10)
+_POSITIONS_BAND_FILL = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
+_POSITIONS_THIN_BORDER = Border(*(Side(style="thin", color="D9D9D9"),) * 4)
+
+# Column -> number_format, by POSITIONS_HEADERS position (1-indexed).
+_POSITIONS_NUMBER_FORMATS = {
+    4: "#,##0.##",       # Quantity
+    5: "#,##0.00",       # Strike
+    6: "0",              # Expiry (d)
+    7: "0.00",           # Vol (%)
+    8: "#,##0.00",       # Settlement Price
+}
+
+
+def _style_positions_table(ws, start_row, header_row, last_data_row, n_cols):
+    """Visually separates the Positions table from the plain, unstyled sheet around it -- same treatment as the Add Leg block, its own color scheme."""
+
+    ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=n_cols)
+    title_cell = ws.cell(row=start_row, column=1)
+    title_cell.fill = _POSITIONS_TITLE_FILL
+    title_cell.font = _POSITIONS_TITLE_FONT
+    title_cell.alignment = Alignment(horizontal="center")
+
+    for col in range(1, n_cols + 1):
+        header_cell = ws.cell(row=header_row, column=col)
+        header_cell.fill = _POSITIONS_HEADER_FILL
+        header_cell.font = _POSITIONS_HEADER_FONT
+        header_cell.border = _POSITIONS_THIN_BORDER
+
+    for row in range(header_row + 1, last_data_row + 1):
+        banded = (row - header_row) % 2 == 0
+        for col in range(1, n_cols + 1):
+            cell = ws.cell(row=row, column=col)
+            cell.border = _POSITIONS_THIN_BORDER
+            if banded:
+                cell.fill = _POSITIONS_BAND_FILL
+            if col in _POSITIONS_NUMBER_FORMATS and isinstance(cell.value, (int, float)):
+                cell.number_format = _POSITIONS_NUMBER_FORMATS[col]
+
+    # A shrinking table (fewer legs today than last time this styling
+    # ran) would otherwise leave stale banding/borders below the real
+    # data -- clear a reasonable buffer of leftover formatting too.
+    for row in range(last_data_row + 1, last_data_row + 51):
+        for col in range(1, n_cols + 1):
+            cell = ws.cell(row=row, column=col)
+            cell.fill = PatternFill(fill_type=None)
+            cell.border = Border()
+
+
 def write_positions_table(ws, imported, extra_rows=None, start_row=13, clear_rows=500):
     """
     Writes (instrument, meta) pairs -- the same shape import_bushel_positions
@@ -475,6 +553,8 @@ def write_positions_table(ws, imported, extra_rows=None, start_row=13, clear_row
         for col, header in enumerate(POSITIONS_HEADERS, start=1):
             ws.cell(row=row_idx, column=col, value=extra.get(header))
         row_idx += 1
+
+    _style_positions_table(ws, start_row, header_row, row_idx - 1, n_cols)
 
     return ws
 
