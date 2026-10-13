@@ -7,6 +7,7 @@ from openpyxl.chart.marker import Marker
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 
 from vol_calculator.instruments import Future, AmericanOption
+from vol_calculator.pricing import AmericanOptionPricer
 from vol_calculator.greeks import GreekEngine
 from vol_calculator.scenarios import (
     spot_ladder,
@@ -63,7 +64,7 @@ def write_dataframe(ws, df, start_row=1, start_col=1, label=None, include_index=
 
 POSITIONS_HEADERS = [
     "Contract", "Commodity", "Type", "Quantity",
-    "Strike", "Expiry (d)", "Vol (%)", "Settlement Price", "Source",
+    "Strike", "Expiry (d)", "Vol (%)", "Settlement Price", "Model Price", "Source",
 ]
 
 FUTURE_SPOT_LABEL_CELL = "A10"
@@ -175,22 +176,23 @@ def read_interest_rate(ws, fallback_rate=0.039, value_cell=INTEREST_RATE_VALUE_C
         return fallback_rate
 
 
-# Column L onward -- outside columns 1-9 that write_positions_table's
-# clear_range touches (so this block survives every refresh regardless
-# of how many Positions rows there are), and leaving J/K as a deliberate
-# two-column visual gap between the Positions table and this block.
-ADD_LEG_LABEL_CELL = "L13"
-ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL = "L14", "M14"
-ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL = "L15", "M15"
-ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL = "L16", "M16"
-ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL = "L17", "M17"
-ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL = "L18", "M18"
-ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL = "L19", "M19"
-ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL = "L20", "M20"
-ADD_LEG_STATUS_CELL = "L21"
+# Column M onward -- outside columns 1-10 that write_positions_table's
+# clear_range touches (Positions is 10 columns wide now that it has a
+# Model Price column, A-J), leaving K/L as a deliberate two-column
+# visual gap between the Positions table and this block.
+ADD_LEG_LABEL_CELL = "M13"
+ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL = "M14", "N14"
+ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL = "M15", "N15"
+ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL = "M16", "N16"
+ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL = "M17", "N17"
+ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL = "M18", "N18"
+ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL = "M19", "N19"
+ADD_LEG_STATUS_CELL = "M20"
 
-ADD_LEG_TYPES = ["Future", "American Option"]
-ADD_LEG_OPTION_TYPES = ["Call", "Put"]
+# Direct leg types -- no more generic "American Option" + a separate
+# Call/Put selector; Call/Put are themselves the type, matching what
+# the Positions table's own Type column already shows.
+ADD_LEG_TYPES = ["Future", "Call", "Put"]
 
 # Visually separates the Add Leg block from the plain, unstyled
 # Positions table it sits below -- a colored header, bold labels and
@@ -208,7 +210,6 @@ _ADD_LEG_THIN_BORDER = Border(*(Side(style="thin"),) * 4)
 _ADD_LEG_ROWS = [
     (ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL),
     (ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL),
-    (ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL),
     (ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL),
     (ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL),
     (ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL),
@@ -218,15 +219,17 @@ _ADD_LEG_ROWS = [
 
 def _style_add_leg_block(ws):
 
-    # J/K are now a deliberate empty gap between the Positions table and
+    # K/L are now a deliberate empty gap between the Positions table and
     # this block -- reset them back to a normal width in case an older
-    # refresh widened them when the block used to sit there.
+    # refresh widened different columns when the block used to sit
+    # elsewhere.
     ws.column_dimensions["J"].width = 8.43
     ws.column_dimensions["K"].width = 8.43
-    ws.column_dimensions["L"].width = 28
-    ws.column_dimensions["M"].width = 16
+    ws.column_dimensions["L"].width = 8.43
+    ws.column_dimensions["M"].width = 28
+    ws.column_dimensions["N"].width = 16
 
-    ws.merge_cells(f"{ADD_LEG_LABEL_CELL}:M13")
+    ws.merge_cells(f"{ADD_LEG_LABEL_CELL}:N13")
     ws[ADD_LEG_LABEL_CELL].fill = _ADD_LEG_HEADER_FILL
     ws[ADD_LEG_LABEL_CELL].font = _ADD_LEG_HEADER_FONT
     ws[ADD_LEG_LABEL_CELL].alignment = Alignment(horizontal="center")
@@ -238,7 +241,7 @@ def _style_add_leg_block(ws):
         ws[value_cell].fill = _ADD_LEG_INPUT_FILL
         ws[value_cell].border = _ADD_LEG_THIN_BORDER
 
-    ws.merge_cells(f"{ADD_LEG_STATUS_CELL}:M21")
+    ws.merge_cells(f"{ADD_LEG_STATUS_CELL}:N20")
     ws[ADD_LEG_STATUS_CELL].fill = _ADD_LEG_STATUS_FILL
     ws[ADD_LEG_STATUS_CELL].font = _ADD_LEG_STATUS_FONT
     ws[ADD_LEG_STATUS_CELL].alignment = Alignment(wrap_text=True, vertical="center")
@@ -246,12 +249,11 @@ def _style_add_leg_block(ws):
 
 
 def write_add_leg_block(ws, contracts):
-    """Add Leg input cells + dropdowns -- v1 covers Future and American Option only (the only types real Daily Prop data ever contains)."""
+    """Add Leg input cells + dropdowns -- v1 covers Future, Call and Put only (the only types real Daily Prop data ever contains)."""
 
     ws[ADD_LEG_LABEL_CELL] = "ADD LEG"
     ws[ADD_LEG_TYPE_LABEL_CELL] = "Type:"
     ws[ADD_LEG_CONTRACT_LABEL_CELL] = "Contract:"
-    ws[ADD_LEG_OPTION_TYPE_LABEL_CELL] = "Call/Put (ignored for Future):"
     ws[ADD_LEG_QUANTITY_LABEL_CELL] = "Quantity:"
     ws[ADD_LEG_STRIKE_LABEL_CELL] = "Strike (blank for Future):"
     ws[ADD_LEG_EXPIRY_LABEL_CELL] = "Expiry d (blank=auto):"
@@ -263,13 +265,6 @@ def write_add_leg_block(ws, contracts):
     type_dv = DataValidation(type="list", formula1=f'"{",".join(ADD_LEG_TYPES)}"', allow_blank=False)
     ws.add_data_validation(type_dv)
     type_dv.add(ws[ADD_LEG_TYPE_VALUE_CELL])
-
-    if ws[ADD_LEG_OPTION_TYPE_VALUE_CELL].value not in ADD_LEG_OPTION_TYPES:
-        ws[ADD_LEG_OPTION_TYPE_VALUE_CELL] = ADD_LEG_OPTION_TYPES[0]
-
-    option_type_dv = DataValidation(type="list", formula1=f'"{",".join(ADD_LEG_OPTION_TYPES)}"', allow_blank=False)
-    ws.add_data_validation(option_type_dv)
-    option_type_dv.add(ws[ADD_LEG_OPTION_TYPE_VALUE_CELL])
 
     if contracts:
         if ws[ADD_LEG_CONTRACT_VALUE_CELL].value not in contracts:
@@ -286,7 +281,6 @@ def read_add_leg_inputs(ws):
     return {
         "type": ws[ADD_LEG_TYPE_VALUE_CELL].value,
         "contract": ws[ADD_LEG_CONTRACT_VALUE_CELL].value,
-        "option_type": ws[ADD_LEG_OPTION_TYPE_VALUE_CELL].value,
         "quantity": ws[ADD_LEG_QUANTITY_VALUE_CELL].value,
         "strike": ws[ADD_LEG_STRIKE_VALUE_CELL].value,
         "expiry_days": ws[ADD_LEG_EXPIRY_VALUE_CELL].value,
@@ -337,17 +331,14 @@ def build_manual_row(inputs, commodity_lookup, auto_expiry_fn):
             "Vol (%)": None, "Settlement Price": None, "Source": "Manual",
         }
 
-    option_type = inputs.get("option_type")
-    if option_type not in ADD_LEG_OPTION_TYPES:
-        raise ValueError(f"Pick Call or Put ({'/'.join(ADD_LEG_OPTION_TYPES)}).")
-
+    # leg_type is "Call" or "Put" directly (checked against ADD_LEG_TYPES above).
     strike = inputs.get("strike")
     vol_pct = inputs.get("vol_pct")
 
     if strike in (None, ""):
-        raise ValueError("Strike is required for American Option.")
+        raise ValueError(f"Strike is required for a {leg_type}.")
     if vol_pct in (None, ""):
-        raise ValueError("Vol (%) is required for American Option.")
+        raise ValueError(f"Vol (%) is required for a {leg_type}.")
 
     expiry_days = inputs.get("expiry_days")
     if expiry_days in (None, ""):
@@ -356,7 +347,7 @@ def build_manual_row(inputs, commodity_lookup, auto_expiry_fn):
             raise ValueError("Couldn't auto-compute Expiry -- enter it manually.")
 
     return {
-        "Contract": contract, "Commodity": commodity, "Type": option_type,
+        "Contract": contract, "Commodity": commodity, "Type": leg_type,
         "Quantity": float(quantity), "Strike": float(strike),
         "Expiry (d)": int(expiry_days), "Vol (%)": float(vol_pct),
         "Settlement Price": None, "Source": "Manual",
@@ -402,7 +393,8 @@ def _position_row(instrument, meta, source):
     if isinstance(instrument, Future):
         return [
             meta["contract"], meta["commodity"], "Future", instrument.quantity,
-            None, None, meta.get("vol_pct"), meta.get("settlement_price"), source,
+            None, None, meta.get("vol_pct"), meta.get("settlement_price"),
+            meta.get("model_price"), source,
         ]
 
     if isinstance(instrument, AmericanOption):
@@ -410,10 +402,59 @@ def _position_row(instrument, meta, source):
             meta["contract"], meta["commodity"],
             "Call" if instrument.option_type == "call" else "Put",
             instrument.quantity, instrument.strike, instrument.expiry_days,
-            round(instrument.volatility * 100, 2), meta.get("settlement_price"), source,
+            round(instrument.volatility * 100, 2), meta.get("settlement_price"),
+            meta.get("model_price"), source,
         ]
 
     raise TypeError(f"Unsupported instrument type: {type(instrument)}")
+
+
+def compute_model_price(instrument, meta, market):
+    """
+    The leg's own theoretical price, computed fresh from its own
+    parameters using the same Black-76-based American-exercise pricer
+    (AmericanOptionPricer, Barone-Adesi-Whaley on a Black process) that
+    Greeks already use everywhere else -- not copied from Settlement
+    Price, which can be a frozen CSV-reported value.
+
+    For a Future, this is just its contract's current engine price
+    (market.price_for) -- which can differ from a frozen Settlement
+    Price if the market has moved since the CSV was generated. For a
+    Call/Put, it's the actual computed premium from strike/expiry/vol/
+    rate, which can likewise differ from a broker-reported settlement.
+
+    Returns None if the contract has no price in market, or if pricing
+    otherwise fails (e.g. a manually-added option with not-yet-valid
+    inputs) -- callers should treat that as "can't be shown yet", not
+    crash the whole refresh over it.
+    """
+
+    contract = meta.get("contract")
+    try:
+        underlying_price = market.price_for(contract)
+    except (KeyError, ValueError):
+        return None
+
+    if isinstance(instrument, Future):
+        return round(underlying_price, 4)
+
+    if isinstance(instrument, AmericanOption):
+        try:
+            return round(
+                AmericanOptionPricer(
+                    futures_price=underlying_price,
+                    strike=instrument.strike,
+                    rate=market.interest_rate,
+                    volatility=instrument.volatility,
+                    expiry_days=instrument.expiry_days,
+                    option_type=instrument.option_type,
+                ).price(),
+                4,
+            )
+        except Exception:
+            return None
+
+    return None
 
 
 def _row_to_instrument(row):
@@ -488,6 +529,7 @@ _POSITIONS_NUMBER_FORMATS = {
     6: "0",              # Expiry (d)
     7: "0.00",           # Vol (%)
     8: "#,##0.00",       # Settlement Price
+    9: "#,##0.00",       # Model Price
 }
 
 

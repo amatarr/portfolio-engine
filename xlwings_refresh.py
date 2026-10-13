@@ -18,7 +18,7 @@ from vol_calculator import (
     Market, Portfolio, latest_daily_prop_file, import_bushel_positions,
     fetch_latest_sofr, contracts_from_imported, prices_from_imported,
     commodity_from_contract, approx_option_expiry_days,
-    build_manual_row, ADD_LEG_STATUS_CELL,
+    build_manual_row, ADD_LEG_STATUS_CELL, compute_model_price,
 )
 from vol_calculator.excel_sync import _row_to_instrument
 from vol_calculator.instruments import Future
@@ -166,6 +166,17 @@ def _refresh(extra_new_row=None, keep_manual=True):
         if isinstance(instrument, Future) and row.get("Settlement Price") is None:
             row["Settlement Price"] = market.futures_prices.get(meta["contract"])
 
+    # "Model Price" -- every leg's own theoretical price computed fresh
+    # from its parameters (Black-76/American-exercise, same engine as
+    # Greeks), for both Daily Prop and Manual legs. Daily Prop legs'
+    # meta dicts get annotated in place so _position_row (called inside
+    # xw_write_positions_table) picks it up the same way it already
+    # does for settlement_price.
+    for instrument, meta in imported:
+        meta["model_price"] = compute_model_price(instrument, meta, market)
+    for row, (instrument, meta) in zip(manual_rows, manual_instruments):
+        row["Model Price"] = compute_model_price(instrument, meta, market)
+
     xw_write_positions_table(home, imported, extra_rows=manual_rows, start_row=13)
 
     future_spot = xw_read_future_spot(home, portfolio_contracts)
@@ -211,13 +222,26 @@ def add_leg():
         ctypes.windll.user32.MessageBoxW(0, message, "Add Leg", 0x30)
         return
 
+    # If a previous attempt already wrote this exact row (its own
+    # _refresh() crashed partway through -- e.g. a transient Excel/COM
+    # hiccup -- before reaching the clear-inputs step below, so the
+    # inputs never got wiped and this is really a retry of the same
+    # click), don't append a second copy of it.
+    dedup_keys = ("Contract", "Type", "Quantity", "Strike", "Expiry (d)", "Vol (%)")
+    already_added = any(
+        all(row.get(k) == new_row.get(k) for k in dedup_keys)
+        for row in xw_read_positions_rows(home, start_row=13)
+        if row.get("Source") == "Manual"
+    )
+
     # Clear the inputs and write the success message only *after*
-    # _refresh() actually completes -- if it raises partway through
-    # (e.g. a transient Excel/COM hiccup), the typed inputs are still
-    # there to retry instead of being silently wiped with nothing saved.
-    _refresh(extra_new_row=new_row)
+    # _refresh() actually completes -- if it raises partway through,
+    # the typed inputs are still there to retry instead of being
+    # silently wiped with nothing saved.
+    _refresh(extra_new_row=None if already_added else new_row)
     xw_clear_add_leg_inputs(home)
-    home[ADD_LEG_STATUS_CELL].value = f"Added {new_row['Quantity']} {new_row['Contract']} ({new_row['Type']})"
+    verb = "Already added" if already_added else "Added"
+    home[ADD_LEG_STATUS_CELL].value = f"{verb} {new_row['Quantity']} {new_row['Contract']} ({new_row['Type']})"
     wb.save()
 
 

@@ -20,13 +20,12 @@ from vol_calculator.excel_sync import (
     ADD_LEG_LABEL_CELL,
     ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL,
     ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL,
-    ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL,
     ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL,
     ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL,
     ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL,
     ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL,
     ADD_LEG_STATUS_CELL,
-    ADD_LEG_TYPES, ADD_LEG_OPTION_TYPES,
+    ADD_LEG_TYPES,
     _position_row,
     _round_greek,
 )
@@ -262,6 +261,7 @@ _POSITIONS_NUMBER_FORMATS = {
     6: "0",
     7: "0.00",
     8: "#,##0.00",
+    9: "#,##0.00",
 }
 
 
@@ -312,7 +312,6 @@ _XL_THIN = 2
 _ADD_LEG_ROWS = [
     (ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL),
     (ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL),
-    (ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL),
     (ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL),
     (ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL),
     (ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL),
@@ -328,10 +327,11 @@ def _xw_style_add_leg_block(sheet):
     # refresh widened them when the block used to sit there.
     sheet.range("J:J").column_width = 8.43
     sheet.range("K:K").column_width = 8.43
-    sheet.range("L:L").column_width = 28
-    sheet.range("M:M").column_width = 16
+    sheet.range("L:L").column_width = 8.43
+    sheet.range("M:M").column_width = 28
+    sheet.range("N:N").column_width = 16
 
-    header = sheet.range(f"{ADD_LEG_LABEL_CELL}:M13")
+    header = sheet.range(f"{ADD_LEG_LABEL_CELL}:N13")
     header.api.Merge()
     header.color = _ADD_LEG_HEADER_RGB
     header.api.Font.Color = 0xFFFFFF
@@ -349,7 +349,7 @@ def _xw_style_add_leg_block(sheet):
         value_range.color = _ADD_LEG_INPUT_RGB
         value_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
 
-    status = sheet.range(f"{ADD_LEG_STATUS_CELL}:M21")
+    status = sheet.range(f"{ADD_LEG_STATUS_CELL}:N20")
     status.api.Merge()
     status.color = _ADD_LEG_STATUS_RGB
     status.api.Font.Italic = True
@@ -363,7 +363,6 @@ def xw_write_add_leg_block(sheet, contracts):
     sheet[ADD_LEG_LABEL_CELL].value = "ADD LEG"
     sheet[ADD_LEG_TYPE_LABEL_CELL].value = "Type:"
     sheet[ADD_LEG_CONTRACT_LABEL_CELL].value = "Contract:"
-    sheet[ADD_LEG_OPTION_TYPE_LABEL_CELL].value = "Call/Put (ignored for Future):"
     sheet[ADD_LEG_QUANTITY_LABEL_CELL].value = "Quantity:"
     sheet[ADD_LEG_STRIKE_LABEL_CELL].value = "Strike (blank for Future):"
     sheet[ADD_LEG_EXPIRY_LABEL_CELL].value = "Expiry d (blank=auto):"
@@ -373,11 +372,6 @@ def xw_write_add_leg_block(sheet, contracts):
     if type_cell.value not in ADD_LEG_TYPES:
         type_cell.value = ADD_LEG_TYPES[0]
     _add_list_validation(type_cell, ADD_LEG_TYPES)
-
-    option_type_cell = sheet[ADD_LEG_OPTION_TYPE_VALUE_CELL]
-    if option_type_cell.value not in ADD_LEG_OPTION_TYPES:
-        option_type_cell.value = ADD_LEG_OPTION_TYPES[0]
-    _add_list_validation(option_type_cell, ADD_LEG_OPTION_TYPES)
 
     if contracts:
         contract_cell = sheet[ADD_LEG_CONTRACT_VALUE_CELL]
@@ -392,7 +386,6 @@ def xw_read_add_leg_inputs(sheet):
     return {
         "type": sheet[ADD_LEG_TYPE_VALUE_CELL].value,
         "contract": sheet[ADD_LEG_CONTRACT_VALUE_CELL].value,
-        "option_type": sheet[ADD_LEG_OPTION_TYPE_VALUE_CELL].value,
         "quantity": sheet[ADD_LEG_QUANTITY_VALUE_CELL].value,
         "strike": sheet[ADD_LEG_STRIKE_VALUE_CELL].value,
         "expiry_days": sheet[ADD_LEG_EXPIRY_VALUE_CELL].value,
