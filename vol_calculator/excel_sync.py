@@ -4,6 +4,7 @@ from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import LineChart, Reference
 from openpyxl.chart.marker import Marker
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 
 from vol_calculator.instruments import Future, AmericanOption
 from vol_calculator.greeks import GreekEngine
@@ -161,6 +162,53 @@ ADD_LEG_STATUS_CELL = "J21"
 ADD_LEG_TYPES = ["Future", "American Option"]
 ADD_LEG_OPTION_TYPES = ["Call", "Put"]
 
+# Visually separates the Add Leg block from the plain, unstyled
+# Positions table it sits below -- a colored header, bold labels and
+# pale-yellow input cells (the standard Excel "this is an editable
+# input" convention), boxed in a border.
+_ADD_LEG_HEADER_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+_ADD_LEG_HEADER_FONT = Font(color="FFFFFF", bold=True, size=11)
+_ADD_LEG_LABEL_FILL = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+_ADD_LEG_LABEL_FONT = Font(bold=True, size=10)
+_ADD_LEG_INPUT_FILL = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+_ADD_LEG_STATUS_FILL = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+_ADD_LEG_STATUS_FONT = Font(italic=True, size=9, color="C00000")
+_ADD_LEG_THIN_BORDER = Border(*(Side(style="thin"),) * 4)
+
+_ADD_LEG_ROWS = [
+    (ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL),
+    (ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL),
+    (ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL),
+    (ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL),
+    (ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL),
+    (ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL),
+    (ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL),
+]
+
+
+def _style_add_leg_block(ws):
+
+    ws.column_dimensions["J"].width = 28
+    ws.column_dimensions["K"].width = 16
+
+    ws.merge_cells(f"{ADD_LEG_LABEL_CELL}:K13")
+    ws[ADD_LEG_LABEL_CELL].fill = _ADD_LEG_HEADER_FILL
+    ws[ADD_LEG_LABEL_CELL].font = _ADD_LEG_HEADER_FONT
+    ws[ADD_LEG_LABEL_CELL].alignment = Alignment(horizontal="center")
+
+    for label_cell, value_cell in _ADD_LEG_ROWS:
+        ws[label_cell].fill = _ADD_LEG_LABEL_FILL
+        ws[label_cell].font = _ADD_LEG_LABEL_FONT
+        ws[label_cell].border = _ADD_LEG_THIN_BORDER
+        ws[value_cell].fill = _ADD_LEG_INPUT_FILL
+        ws[value_cell].border = _ADD_LEG_THIN_BORDER
+
+    ws.merge_cells(f"{ADD_LEG_STATUS_CELL}:K21")
+    ws[ADD_LEG_STATUS_CELL].fill = _ADD_LEG_STATUS_FILL
+    ws[ADD_LEG_STATUS_CELL].font = _ADD_LEG_STATUS_FONT
+    ws[ADD_LEG_STATUS_CELL].alignment = Alignment(wrap_text=True, vertical="center")
+    ws[ADD_LEG_STATUS_CELL].border = _ADD_LEG_THIN_BORDER
+
 
 def write_add_leg_block(ws, contracts):
     """Add Leg input cells + dropdowns -- v1 covers Future and American Option only (the only types real Daily Prop data ever contains)."""
@@ -195,6 +243,8 @@ def write_add_leg_block(ws, contracts):
         contract_dv = DataValidation(type="list", formula1=f'"{",".join(contracts)}"', allow_blank=False)
         ws.add_data_validation(contract_dv)
         contract_dv.add(ws[ADD_LEG_CONTRACT_VALUE_CELL])
+
+    _style_add_leg_block(ws)
 
 
 def read_add_leg_inputs(ws):

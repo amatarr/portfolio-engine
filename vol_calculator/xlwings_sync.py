@@ -24,6 +24,7 @@ from vol_calculator.excel_sync import (
     ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL,
     ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL,
     ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL,
+    ADD_LEG_STATUS_CELL,
     ADD_LEG_TYPES, ADD_LEG_OPTION_TYPES,
     _position_row,
     _round_greek,
@@ -222,6 +223,56 @@ def xw_write_positions_table(sheet, imported, extra_rows=None, start_row=13, cle
         sheet.range((header_row + 1, 1)).value = rows
 
 
+_ADD_LEG_HEADER_RGB = (31, 78, 120)
+_ADD_LEG_LABEL_RGB = (221, 235, 247)
+_ADD_LEG_INPUT_RGB = (255, 242, 204)
+_ADD_LEG_STATUS_RGB = (242, 242, 242)
+_XL_CONTINUOUS = 1
+_XL_THIN = 2
+
+_ADD_LEG_ROWS = [
+    (ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL),
+    (ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL),
+    (ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL),
+    (ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL),
+    (ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL),
+    (ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL),
+    (ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL),
+]
+
+
+def _xw_style_add_leg_block(sheet):
+    """Live mirror of excel_sync._style_add_leg_block -- same colors, via COM instead of openpyxl styles."""
+
+    sheet.range("J:J").column_width = 28
+    sheet.range("K:K").column_width = 16
+
+    header = sheet.range(f"{ADD_LEG_LABEL_CELL}:K13")
+    header.api.Merge()
+    header.color = _ADD_LEG_HEADER_RGB
+    header.api.Font.Color = 0xFFFFFF
+    header.api.Font.Bold = True
+    header.api.HorizontalAlignment = -4108  # xlCenter
+    header.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+
+    for label_cell, value_cell in _ADD_LEG_ROWS:
+        label_range = sheet.range(label_cell)
+        label_range.color = _ADD_LEG_LABEL_RGB
+        label_range.api.Font.Bold = True
+        label_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+
+        value_range = sheet.range(value_cell)
+        value_range.color = _ADD_LEG_INPUT_RGB
+        value_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+
+    status = sheet.range(f"{ADD_LEG_STATUS_CELL}:K21")
+    status.api.Merge()
+    status.color = _ADD_LEG_STATUS_RGB
+    status.api.Font.Italic = True
+    status.api.WrapText = True
+    status.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+
+
 def xw_write_add_leg_block(sheet, contracts):
     """Add Leg input cells + dropdowns -- live mirror of excel_sync.write_add_leg_block. Caller must have run xw_reset_dropdown_validations() once this refresh first."""
 
@@ -249,6 +300,8 @@ def xw_write_add_leg_block(sheet, contracts):
         if contract_cell.value not in contracts:
             contract_cell.value = contracts[0]
         _add_list_validation(contract_cell, contracts)
+
+    _xw_style_add_leg_block(sheet)
 
 
 def xw_read_add_leg_inputs(sheet):
