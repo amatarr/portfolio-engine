@@ -180,7 +180,15 @@ def xw_write_interest_rate_cell(sheet, sofr=None, fallback_rate=0.039, error=Non
         sheet[INTEREST_RATE_VALUE_CELL].value = round(fallback_rate * 100, 2)
 
     if sofr:
-        sheet[SOFR_CAPTION_CELL].value = f"SOFR -- last updated {sofr['effective_date']} -- {sofr['source_url']}"
+        caption = sheet[SOFR_CAPTION_CELL]
+        text = f"SOFR -- last updated {sofr['effective_date']} (click for source)"
+        # A cell can't hold two hyperlinks -- clear any existing one
+        # (from a previous refresh) before adding the current one.
+        if caption.api.Hyperlinks.Count:
+            caption.api.Hyperlinks.Delete()
+        sheet.api.Hyperlinks.Add(Anchor=caption.api, Address=sofr["source_url"], TextToDisplay=text)
+        caption.api.Font.Color = 0xC16305  # BGR for RGB(5,99,193)
+        caption.api.Font.Underline = 2  # xlUnderlineStyleSingle
     elif error:
         sheet[SOFR_CAPTION_CELL].value = f"SOFR fetch failed -- using manually entered rate. Error: {error}"
     else:

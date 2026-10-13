@@ -157,7 +157,10 @@ def write_interest_rate_cell(ws, sofr=None, fallback_rate=0.039,
         ws[value_cell] = round(fallback_rate * 100, 2)
 
     if sofr:
-        ws[caption_cell] = f"SOFR -- last updated {sofr['effective_date']} -- {sofr['source_url']}"
+        caption = ws[caption_cell]
+        caption.value = f"SOFR -- last updated {sofr['effective_date']} (click for source)"
+        caption.hyperlink = sofr["source_url"]
+        caption.font = Font(color="0563C1", underline="single", size=10)
     else:
         ws[caption_cell] = "SOFR unavailable -- using manually entered rate."
 
