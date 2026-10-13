@@ -151,8 +151,13 @@ def add_leg():
             inputs, commodity_lookup=commodity_from_contract, auto_expiry_fn=approx_option_expiry_days,
         )
     except ValueError as e:
-        home[ADD_LEG_STATUS_CELL].value = f"Add Leg failed: {e}"
+        message = f"Add Leg failed: {e}"
+        home[ADD_LEG_STATUS_CELL].value = message
         wb.save()
+        # A validation failure is easy to miss if it only lands in a
+        # cell -- pop up a real dialog too, same as a VBA MsgBox would.
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, message, "Add Leg", 0x30)
         return
 
     xw_clear_add_leg_inputs(home)
