@@ -27,6 +27,7 @@ from vol_calculator.xlwings_sync import (
     xw_write_interest_rate_cell, xw_read_interest_rate,
     xw_write_positions_table, xw_read_positions_rows,
     xw_write_add_leg_block, xw_read_add_leg_inputs, xw_clear_add_leg_inputs,
+    xw_read_live_quotes,
     xw_write_greeks_sheet,
     xw_write_spot_vol_ladder_sheet, xw_write_heat_maps_sheet,
     xw_write_stress_sheet, xw_write_strike_sheet,
@@ -106,6 +107,15 @@ def _refresh(extra_new_row=None, keep_manual=True):
     for instrument, _ in manual_instruments:
         portfolio.add(instrument)
 
+    # Every analytic sheet (Greeks, ladders, heat maps, stress...) breaks
+    # its numbers down per contract -- a manually-added leg's contract
+    # has to be in this list too, or its own row just never shows up even
+    # though it's correctly priced and counted in portfolio-wide totals.
+    portfolio_contracts = list(contracts)
+    for _, meta in manual_instruments:
+        if meta["contract"] not in portfolio_contracts:
+            portfolio_contracts.append(meta["contract"])
+
     sofr = None
     sofr_error = None
     try:
@@ -113,9 +123,29 @@ def _refresh(extra_new_row=None, keep_manual=True):
     except Exception as e:
         sofr_error = f"{type(e).__name__}: {e}"
 
+    # The Home sheet's live CQGXL watchlist -- same block
+    # push_quotes_supabase.py reads to feed Streamlit. Daily Prop's own
+    # settlement price always wins for a contract it covers (pinned,
+    # same rule as Streamlit); this only fills in a price for a contract
+    # Daily Prop doesn't have today, e.g. a brand-new leg added by hand
+    # that isn't in the current book yet.
+    live_quotes = xw_read_live_quotes(home)
+    live_prices = {q["contract"]: q["price"] for q in live_quotes}
+    for contract, price in live_prices.items():
+        prices.setdefault(contract, price)
+
+    # Add Leg's Contract dropdown should offer every live-quoted
+    # contract too, not just today's Daily Prop book -- otherwise there
+    # was never a way to add a leg for a contract Daily Prop doesn't
+    # happen to carry today.
+    add_leg_contracts = list(contracts)
+    for contract in live_prices:
+        if contract not in add_leg_contracts:
+            add_leg_contracts.append(contract)
+
     xw_reset_dropdown_validations(home)
-    xw_write_future_spot_selector(home, contracts)
-    xw_write_add_leg_block(home, contracts)
+    xw_write_future_spot_selector(home, portfolio_contracts)
+    xw_write_add_leg_block(home, add_leg_contracts)
     xw_write_interest_rate_cell(home, sofr=sofr, fallback_rate=DEFAULT_INTEREST_RATE, error=sofr_error)
     interest_rate = xw_read_interest_rate(home, fallback_rate=DEFAULT_INTEREST_RATE)
 
@@ -126,8 +156,8 @@ def _refresh(extra_new_row=None, keep_manual=True):
 
     xw_write_positions_table(home, imported, extra_rows=manual_rows, start_row=13)
 
-    future_spot = xw_read_future_spot(home, contracts)
-    xw_write_greeks_sheet(wb.sheets["Greeks"], portfolio, market, contracts)
+    future_spot = xw_read_future_spot(home, portfolio_contracts)
+    xw_write_greeks_sheet(wb.sheets["Greeks"], portfolio, market, portfolio_contracts)
     xw_write_spot_vol_ladder_sheet(wb.sheets["Spot&Vol Ladder"], portfolio, market, future_spot)
     xw_write_heat_maps_sheet(wb.sheets["Heat Maps"], portfolio, market, future_spot)
     xw_write_stress_sheet(wb.sheets["Stress"], portfolio, market, future_spot)
@@ -139,7 +169,7 @@ def _refresh(extra_new_row=None, keep_manual=True):
 
     print(
         f"Refreshed (live) from {path} -- {len(imported)} Daily Prop legs + {len(manual_rows)} Manual legs, "
-        f"{len(contracts)} contracts, Future Spot={future_spot}, Interest Rate={interest_rate * 100:.2f}%"
+        f"{len(portfolio_contracts)} contracts, Future Spot={future_spot}, Interest Rate={interest_rate * 100:.2f}%"
     )
 
 

@@ -28,6 +28,7 @@ from vol_calculator.excel_sync import (
     _round_greek,
 )
 from vol_calculator.greeks import GreekEngine
+from vol_calculator.cqg_quotes import _convert_cqg_symbol
 from vol_calculator.scenarios import (
     spot_ladder,
     vol_ladder,
@@ -40,6 +41,42 @@ from vol_calculator.scenarios import (
 )
 
 _XL_VALIDATE_LIST = 3
+
+# (commodity, symbol_col, price_col) -- matches the Home sheet's own live
+# CQGXL watchlist layout (rows 3-8 under each commodity header). Same
+# block push_quotes_supabase.py reads to feed Streamlit; shared here so
+# xlwings_refresh.py can price contracts that aren't in today's Daily
+# Prop file too (e.g. a brand-new leg added by hand), instead of only
+# ever having a price when CSV-imported.
+_CQG_BLOCKS = [("Corn", 1, 2), ("Soybean", 5, 6), ("SRW Wheat", 9, 10)]
+_CQG_ROWS = range(3, 9)
+
+
+def xw_read_live_quotes(sheet):
+    """Reads the Home sheet's live CQGXL watchlist -- [{"commodity", "contract", "price"}, ...]. Skips a cell showing text (e.g. "Disconnected from server.") instead of a number."""
+
+    quotes = []
+
+    for commodity, symbol_col, price_col in _CQG_BLOCKS:
+        for row in _CQG_ROWS:
+            symbol = sheet.range((row, symbol_col)).value
+            price = sheet.range((row, price_col)).value
+
+            if not symbol or price is None:
+                continue
+
+            try:
+                price = float(price)
+            except (TypeError, ValueError):
+                continue
+
+            quotes.append({
+                "commodity": commodity,
+                "contract": _convert_cqg_symbol(str(symbol)),
+                "price": price,
+            })
+
+    return quotes
 
 
 def xw_reset_dropdown_validations(sheet):

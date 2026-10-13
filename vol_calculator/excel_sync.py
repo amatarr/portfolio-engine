@@ -280,10 +280,17 @@ def prices_from_imported(imported):
     stand-in for live CQGXL prices until the Home sheet's formula cells
     have cached values to read (requires Excel to have actually
     recalculated with CQGXL connected and been saved at least once).
+
+    Only a Future leg's settlement_price is the underlying contract's own
+    price -- an Option leg's settlement_price is that option's own
+    premium, a completely different number, and must never overwrite the
+    underlying price (same bug/fix as app.py's Bushel import handler).
     """
 
     prices = {}
-    for _, meta in imported:
+    for instrument, meta in imported:
+        if not isinstance(instrument, Future):
+            continue
         price = meta.get("settlement_price")
         if price is not None:
             prices[meta["contract"]] = price

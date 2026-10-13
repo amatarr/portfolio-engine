@@ -14,20 +14,11 @@ import tomllib
 import xlwings as xw
 from supabase import create_client
 
-from vol_calculator.cqg_quotes import _convert_cqg_symbol
+from vol_calculator.xlwings_sync import xw_read_live_quotes
 
 WORKBOOK_PATH = "Position_Analysis.xlsm"
 TABLE_NAME = "Quotes"
 PUSH_INTERVAL_SECONDS = 5
-
-# (commodity, symbol_col, price_col) -- matches the Home sheet's own
-# CORN/SOYBEANS/WHEAT layout (rows 3-8 under each header).
-_BLOCKS = [
-    ("Corn", 1, 2),
-    ("Soybean", 5, 6),
-    ("SRW Wheat", 9, 10),
-]
-_ROWS = range(3, 9)
 
 
 def _load_secrets():
@@ -36,37 +27,10 @@ def _load_secrets():
 
 
 def read_live_quotes():
+    """Thin wrapper over the shared Home-sheet watchlist reader -- xlwings_refresh.py uses the same one to price legs outside today's Daily Prop file."""
 
     wb = xw.Book(WORKBOOK_PATH)
-    home = wb.sheets["Home"]
-
-    quotes = []
-
-    for commodity, symbol_col, price_col in _BLOCKS:
-        for row in _ROWS:
-            symbol = home.range((row, symbol_col)).value
-            price = home.range((row, price_col)).value
-
-            if not symbol or price is None:
-                continue
-
-            try:
-                price = float(price)
-            except (TypeError, ValueError):
-                # CQGXL cells show text like "Disconnected from server." or
-                # "#N/A" during a transient connection drop instead of a
-                # number -- skip just this one contract for this cycle
-                # rather than crashing the whole loop over it.
-                print(f"Skipping {symbol}: non-numeric price {price!r}")
-                continue
-
-            quotes.append({
-                "contract": _convert_cqg_symbol(str(symbol)),
-                "price": price,
-                "commodity": commodity,
-            })
-
-    return quotes
+    return xw_read_live_quotes(wb.sheets["Home"])
 
 
 def push_once(client, quotes):
