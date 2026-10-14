@@ -39,6 +39,7 @@ from vol_calculator.contracts import (
     multiplier_for,
     approx_option_expiry_days,
     commodity_from_contract,
+    option_expiry_candidates,
 )
 from vol_calculator.bushel_import import import_bushel_positions, latest_daily_prop_file, daily_prop_as_of_date
 from vol_calculator.excel_sync import (
@@ -119,6 +120,7 @@ __all__ = [
     "multiplier_for",
     "approx_option_expiry_days",
     "commodity_from_contract",
+    "option_expiry_candidates",
     "import_bushel_positions",
     "latest_daily_prop_file",
     "daily_prop_as_of_date",

@@ -61,6 +61,131 @@ def commodity_from_contract(contract, fallback="Unknown"):
     return fallback
 
 
+def _last_business_day(year, month):
+
+    last_day = calendar.monthrange(year, month)[1]
+    d = date(year, month, last_day)
+
+    while d.weekday() >= 5:  # Sat=5, Sun=6
+        d -= timedelta(days=1)
+
+    return d
+
+
+def _option_expiry_for_named_month(year, month):
+    """
+    CME grain options (standard and serial alike) expire on the last
+    Friday that's at least 2 business days before the last business day
+    of the calendar month BEFORE the option's own named month -- e.g. a
+    "November" option (whether that's the serial on a December future,
+    or -- for a commodity that lists a November future -- the standard
+    one) expires relative to October's last business day. Verified
+    directly against a real CME-sourced expiry table (12 points, Corn,
+    spanning Nov 2026 - Dec 2028) -- matches exactly for near-term
+    months; can drift by up to a few calendar days for months further
+    out, since this doesn't know CME's actual holiday calendar (only
+    weekends), unlike the exchange's own published dates.
+    """
+
+    prior_month = month - 1 or 12
+    prior_year = year if month > 1 else year - 1
+
+    anchor = _last_business_day(prior_year, prior_month)
+
+    d = anchor
+    while d.weekday() != 4:  # Friday
+        d -= timedelta(days=1)
+
+    while _count_business_days_between(d, anchor) < 2:
+        d -= timedelta(days=7)
+
+    return d
+
+
+def _count_business_days_between(a, b):
+    """Business days strictly between two dates, a < b."""
+
+    n = 0
+    d = a + timedelta(days=1)
+
+    while d < b:
+        if d.weekday() < 5:
+            n += 1
+        d += timedelta(days=1)
+
+    return n
+
+
+def option_expiry_candidates(contract, today=None):
+    """
+    Every plausible option expiry for a given underlying future contract
+    (e.g. "ZCZ26") that hasn't passed yet: the STANDARD option (same
+    named month as the future itself) plus a SERIAL option for every
+    calendar month between the previous listed future and this one (a
+    future month further out can have more than one serial -- e.g.
+    March corn has January and February serials, since the previous
+    listed corn future is December).
+
+    This can suggest a serial a bit further out than CME has actually
+    listed yet for a far-dated future (the exchange only opens serials
+    on a rolling basis) -- it's a suggestion to override if it doesn't
+    match what's actually tradeable yet, same as any other Add Leg
+    default.
+
+    Returns a list of {"label", "expiry_date", "days"} dicts, nearest
+    first, or [] if the contract doesn't parse or every candidate has
+    already expired. "days" is calendar days from today to expiry.
+    """
+
+    today = today or date.today()
+
+    if len(contract) < 3:
+        return []
+
+    month_letter = contract[-3]
+    year_part = contract[-2:]
+
+    month_num = _CME_MONTH_TO_NUMBER.get(month_letter)
+    if month_num is None or not year_part.isdigit():
+        return []
+
+    year = 2000 + int(year_part)
+
+    commodity = commodity_from_contract(contract, fallback=None)
+    months_cycle = COMMODITIES[commodity]["months"] if commodity else None
+    listed_months = sorted(_CME_MONTH_TO_NUMBER[m] for m in months_cycle) if months_cycle else []
+
+    # The gap months needing a serial option are whatever's strictly
+    # between the previous listed future and this one. If none of this
+    # commodity's listed months come earlier in the SAME calendar year
+    # (e.g. March corn, where the previous listed future is December of
+    # the prior year), the gap simply starts from January instead of
+    # wrapping the month number past December.
+    earlier_listed = [m for m in listed_months if m < month_num]
+    previous_future_month = max(earlier_listed) if earlier_listed else 0
+
+    serial_months = list(range(previous_future_month + 1, month_num))
+
+    candidates = []
+
+    for named_month, is_standard in [(m, False) for m in serial_months] + [(month_num, True)]:
+        expiry_date = _option_expiry_for_named_month(year, named_month)
+        days = (expiry_date - today).days
+
+        if days <= 0:
+            continue
+
+        month_name = calendar.month_abbr[named_month]
+        kind = "standard" if is_standard else "serial"
+        candidates.append({
+            "label": f"{month_name} {year} ({kind}) -- {expiry_date.isoformat()}, {days}d",
+            "expiry_date": expiry_date,
+            "days": days,
+        })
+
+    return candidates
+
+
 def approx_option_expiry_days(contract, today=None):
     """
     Rough stand-in for a grain option's real expiry date. CME's actual

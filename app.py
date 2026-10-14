@@ -41,6 +41,7 @@ from vol_calculator import (
     import_cqg_quotes,
     compute_model_price,
     daily_prop_as_of_date,
+    option_expiry_candidates,
 )
 
 st.set_page_config(page_title="Vol Calculator", layout="wide")
@@ -665,6 +666,24 @@ with st.container(border=True):
 
         is_future = leg_type == "Future"
 
+        # Real CME expiry candidates (standard + serial options on this
+        # contract) -- outside the form so picking one immediately
+        # updates the Expiry (d) field's default below, same reasoning
+        # as Contract already being outside the form.
+        chosen_expiry_days = None
+        if not is_future and current_contract and "expiry_days" in spec["defaults"]:
+            expiry_candidates = option_expiry_candidates(current_contract)
+            if expiry_candidates:
+                expiry_label_col, expiry_sel_col = st.columns([0.5, 2.5])
+                expiry_label_col.markdown("Suggested Expiry")
+                chosen_label = expiry_sel_col.selectbox(
+                    "Suggested Expiry", [c["label"] for c in expiry_candidates],
+                    label_visibility="collapsed", key=f"expiry_choice_{current_contract}",
+                )
+                chosen_expiry_days = next(
+                    c["days"] for c in expiry_candidates if c["label"] == chosen_label
+                )
+
         with st.form(f"add_{leg_type}"):
 
             n_cols = len(spec["defaults"]) + (1 if underlying_price is not None else 0) + (0 if is_future else 1)
@@ -677,9 +696,14 @@ with st.container(border=True):
                 col = field_cols[col_idx]
                 col_idx += 1
 
-                if field == "expiry_days" and auto_expiry is not None:
-                    col.number_input(field, value=auto_expiry, disabled=True)
-                    kwargs[field] = auto_expiry
+                if field == "expiry_days":
+                    # Pre-filled from the chosen suggestion above (real
+                    # CME standard/serial expiry) if one exists, else the
+                    # old rough estimate -- either way, still a normal
+                    # editable field, never disabled, since the exact
+                    # fill can differ from any suggestion.
+                    default_expiry = chosen_expiry_days if chosen_expiry_days is not None else (auto_expiry or default)
+                    kwargs[field] = int(col.number_input(field, value=int(default_expiry), step=1))
                 else:
                     kwargs[field] = _render_field(col, field, default)
 
