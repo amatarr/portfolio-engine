@@ -309,8 +309,13 @@ def _leg_row(leg, position_index, structure, contract, stored_price, market, fut
 
     mark_to_market = compute_model_price(leg, {"contract": contract}, market)
 
+    # No recorded Entry Price (e.g. a Daily Prop row with a blank
+    # settlement, or a manual leg added before this existed) -- Mark to
+    # Market is the best available stand-in, not a blank cell.
+    entry_price = stored_price if stored_price is not None else mark_to_market
+
     return {
-        "#": position_index, "Contract": contract, "Entry Price": stored_price,
+        "#": position_index, "Contract": contract, "Entry Price": entry_price,
         "Structure": structure,
         "Type": "Call" if leg.option_type == "call" else "Put",
         "Quantity": leg.quantity, "Strike": leg.strike,
@@ -638,9 +643,16 @@ with st.container(border=True):
 
         st.subheader("Add Leg")
 
-        all_contracts = [c for codes in contracts_by_commodity.values() for c in codes]
+        # Commodities that actually have a contract to offer, in their
+        # usual order -- picking one narrows Contract below to just its
+        # contracts instead of every contract across all commodities.
+        commodities_with_contracts = [
+            c for c in contracts_by_commodity if contracts_by_commodity[c]
+        ]
 
-        type_label_col, type_sel_col, contract_label_col, contract_sel_col = st.columns([0.5, 1, 0.7, 1.3])
+        type_label_col, type_sel_col, comm_label_col, comm_sel_col, contract_label_col, contract_sel_col = (
+            st.columns([0.5, 1, 0.8, 1, 0.7, 1.3])
+        )
 
         type_label_col.markdown("Type")
         leg_type = type_sel_col.selectbox(
@@ -648,18 +660,23 @@ with st.container(border=True):
         )
         spec = LEG_BUILDERS[leg_type]
 
+        comm_label_col.markdown("Commodity")
         contract_label_col.markdown("Contract")
 
-        if not all_contracts:
-            contract_sel_col.warning("No contracts -- set a price in Market above first.")
+        if not commodities_with_contracts:
+            comm_sel_col.warning("None yet")
+            contract_sel_col.warning("Set a price in Market above first.")
             current_contract = None
             auto_expiry = None
             underlying_price = None
         else:
+            selected_commodity = comm_sel_col.selectbox(
+                "Commodity", commodities_with_contracts, label_visibility="collapsed",
+            )
+            commodity_contracts = contracts_by_commodity[selected_commodity]
+
             current_contract = contract_sel_col.selectbox(
-                "Contract", all_contracts,
-                format_func=lambda c: f"{_commodity_from_contract(c)} -- {c}",
-                label_visibility="collapsed",
+                "Contract", commodity_contracts, label_visibility="collapsed",
             )
             underlying_price = st.session_state.market.futures_prices.get(current_contract)
             auto_expiry = approx_option_expiry_days(current_contract)
