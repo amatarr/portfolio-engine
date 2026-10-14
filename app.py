@@ -52,6 +52,17 @@ st.markdown(
     div[data-testid="stTextInput"] { max-width: 240px; }
     div[data-testid="stSelectbox"] { max-width: 240px; }
 
+    /* Quotes box: tight rows (label + price) instead of normal widget
+       spacing, so a dozen contracts don't take a dozen widgets' worth
+       of vertical room. */
+    .st-key-cqg_quotes_box div[data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-cqg_quotes_box div[data-testid="stHorizontalBlock"] {
+        margin-bottom: -0.6rem;
+    }
+    .st-key-cqg_quotes_box div[data-testid="stNumberInput"] input {
+        padding-top: 0.25rem; padding-bottom: 0.25rem; height: 1.8rem;
+    }
+
     .st-key-add_leg_btn button {
         background-color: #2e7d32; color: white; border-color: #1b5e20;
     }
@@ -486,6 +497,15 @@ def _render_quotes_box():
 
         comm_cols = st.columns(len(contracts_by_commodity))
 
+        def _price_for(code):
+            # This box always shows the live feed, regardless of whether
+            # the contract's calc price is pinned to a Daily Prop CSV
+            # settlement -- the pin only affects the Positions table/
+            # engine, never what's displayed here.
+            return quote_price_lookup.get(
+                code, st.session_state.market.futures_prices.get(code, 528.75)
+            )
+
         for comm_col, (comm, codes) in zip(comm_cols, contracts_by_commodity.items()):
             with comm_col:
                 st.markdown(f"**{comm.upper()}**")
@@ -494,56 +514,32 @@ def _render_quotes_box():
                     st.caption("-")
                     continue
 
-                def _price_for(code):
-                    # This box always shows the live feed, regardless of
-                    # whether the contract's calc price is pinned to a
-                    # Daily Prop CSV settlement -- the pin only affects
-                    # the Positions table/engine, never what's displayed
-                    # here.
-                    return quote_price_lookup.get(
-                        code, st.session_state.market.futures_prices.get(code, 528.75)
+                # One tight inline row per contract (label + editable
+                # price) instead of a full data_editor grid -- no header
+                # row or hover toolbar per commodity, just the numbers.
+                for code in codes:
+                    price = float(_price_for(code))
+                    label_col, price_col = st.columns([1, 1])
+                    label_col.markdown(f"<div style='padding-top:0.5rem'>{code}</div>", unsafe_allow_html=True)
+                    # Keying on the live price forces Streamlit to treat
+                    # a real tick as a new widget -- a number_input's
+                    # value= is only its default on first creation, same
+                    # reasoning as the data_editor it replaces.
+                    edited_price = price_col.number_input(
+                        code, value=price, step=0.25, format="%.2f",
+                        label_visibility="collapsed", key=f"quote_price_{code}_{price:.4f}",
                     )
 
-                prices = [float(_price_for(code)) for code in codes]
-
-                quotes_df = pd.DataFrame([
-                    {"Contract": code, "Price": price, "ATM IV": None}
-                    for code, price in zip(codes, prices)
-                ])
-
-                # st.data_editor only uses its dataframe as a *default on
-                # first creation* for a given key -- it does NOT re-sync to
-                # new values on later reruns with the same key (confirmed:
-                # forcing a new price into session_state had zero effect on
-                # what was displayed). Folding the current prices into the
-                # key forces Streamlit to treat a real change as a new
-                # widget, so live ticks and locked/pinned prices actually
-                # show up instead of freezing at whatever first rendered.
-                price_signature = "_".join(f"{p:.4f}" for p in prices)
-
-                edited_df = st.data_editor(
-                    quotes_df,
-                    hide_index=True,
-                    width="stretch",
-                    height=38 * (len(quotes_df) + 1),
-                    disabled=["Contract", "ATM IV"],
-                    key=f"quotes_editor_{comm}_{price_signature}",
-                    column_config={
-                        "Price": st.column_config.NumberColumn(format="%.2f", step=0.25),
-                    },
-                )
-
-                for _, row in edited_df.iterrows():
-                    if row["Contract"] in st.session_state.csv_locked_contracts:
+                    if code in st.session_state.csv_locked_contracts:
                         # Pinned contract: this box is informational only
                         # for it, never writes back into the engine's price.
                         continue
-                    if row["Contract"] not in quote_price_lookup:
+                    if code not in quote_price_lookup:
                         # No live quote for this contract -- leave its
                         # engine price exactly as-is rather than writing
                         # back the displayed fallback value every rerun.
                         continue
-                    st.session_state.market.futures_prices[row["Contract"]] = float(row["Price"])
+                    st.session_state.market.futures_prices[code] = float(edited_price)
 
 
 if "portfolio" not in st.session_state:
@@ -603,231 +599,237 @@ Prices are futures cents per bushel; time is in calendar days.
 # --- control panel (formerly the sidebar) ---
 with st.container(border=True):
 
-    st.subheader("Market")
+    col_market, col_addleg = st.columns(2)
 
-    live_quotes = _load_live_quotes()
-    contracts_by_commodity = _build_contracts_by_commodity(live_quotes)
+    with col_market:
 
-    col_ir, col_sofr = st.columns([1, 2])
+        st.subheader("Market")
 
-    with col_ir:
-        ir_label_col, ir_value_col = st.columns([1, 1])
-        ir_label_col.markdown("Interest Rate (%)")
-        interest_rate_pct = ir_value_col.number_input(
-            "Interest Rate (%)", value=float(st.session_state.market.interest_rate) * 100,
-            step=0.01, format="%.2f", label_visibility="collapsed",
-        )
-    st.session_state.market.interest_rate = interest_rate_pct / 100
+        live_quotes = _load_live_quotes()
+        contracts_by_commodity = _build_contracts_by_commodity(live_quotes)
 
-    with col_sofr:
-        st.write("")
-        try:
-            _sofr = _cached_sofr()
-            st.caption(
-                f"SOFR: {_sofr['rate'] * 100:.2f}% "
-                f"(updated {_sofr['effective_date']}) -- "
-                f"[NY Fed]({_sofr['source_url']})"
+        col_ir, col_sofr = st.columns([1, 2])
+
+        with col_ir:
+            ir_label_col, ir_value_col = st.columns([1, 1])
+            ir_label_col.markdown("Interest Rate (%)")
+            interest_rate_pct = ir_value_col.number_input(
+                "Interest Rate (%)", value=float(st.session_state.market.interest_rate) * 100,
+                step=0.01, format="%.2f", label_visibility="collapsed",
             )
-        except Exception:
-            st.caption("SOFR unavailable -- using manually entered rate.")
+        st.session_state.market.interest_rate = interest_rate_pct / 100
 
-    _render_quotes_box()
+        with col_sofr:
+            st.write("")
+            try:
+                _sofr = _cached_sofr()
+                st.caption(
+                    f"SOFR: {_sofr['rate'] * 100:.2f}% "
+                    f"(updated {_sofr['effective_date']}) -- "
+                    f"[NY Fed]({_sofr['source_url']})"
+                )
+            except Exception:
+                st.caption("SOFR unavailable -- using manually entered rate.")
 
-    st.subheader("Add Leg")
+        _render_quotes_box()
 
-    all_contracts = [c for codes in contracts_by_commodity.values() for c in codes]
+    with col_addleg:
 
-    type_label_col, type_sel_col, contract_label_col, contract_sel_col = st.columns([0.5, 1, 0.7, 1.3])
+        st.subheader("Add Leg")
 
-    type_label_col.markdown("Type")
-    leg_type = type_sel_col.selectbox(
-        "Type", list(LEG_BUILDERS.keys()), label_visibility="collapsed"
-    )
-    spec = LEG_BUILDERS[leg_type]
+        all_contracts = [c for codes in contracts_by_commodity.values() for c in codes]
 
-    contract_label_col.markdown("Contract")
+        type_label_col, type_sel_col, contract_label_col, contract_sel_col = st.columns([0.5, 1, 0.7, 1.3])
 
-    if not all_contracts:
-        contract_sel_col.warning("No contracts -- set a price in Market above first.")
-        current_contract = None
-        auto_expiry = None
-        underlying_price = None
-    else:
-        current_contract = contract_sel_col.selectbox(
-            "Contract", all_contracts,
-            format_func=lambda c: f"{_commodity_from_contract(c)} -- {c}",
-            label_visibility="collapsed",
+        type_label_col.markdown("Type")
+        leg_type = type_sel_col.selectbox(
+            "Type", list(LEG_BUILDERS.keys()), label_visibility="collapsed"
         )
-        underlying_price = st.session_state.market.futures_prices.get(current_contract)
-        auto_expiry = approx_option_expiry_days(current_contract)
+        spec = LEG_BUILDERS[leg_type]
 
-    is_future = leg_type == "Future"
+        contract_label_col.markdown("Contract")
 
-    with st.form(f"add_{leg_type}"):
+        if not all_contracts:
+            contract_sel_col.warning("No contracts -- set a price in Market above first.")
+            current_contract = None
+            auto_expiry = None
+            underlying_price = None
+        else:
+            current_contract = contract_sel_col.selectbox(
+                "Contract", all_contracts,
+                format_func=lambda c: f"{_commodity_from_contract(c)} -- {c}",
+                label_visibility="collapsed",
+            )
+            underlying_price = st.session_state.market.futures_prices.get(current_contract)
+            auto_expiry = approx_option_expiry_days(current_contract)
 
-        n_cols = len(spec["defaults"]) + (1 if underlying_price is not None else 0) + (0 if is_future else 1)
-        field_cols = st.columns(n_cols)
+        is_future = leg_type == "Future"
 
-        kwargs = {}
-        underlying_override = None
-        col_idx = 0
-        for field, default in spec["defaults"].items():
-            col = field_cols[col_idx]
-            col_idx += 1
+        with st.form(f"add_{leg_type}"):
 
-            if field == "expiry_days" and auto_expiry is not None:
-                col.number_input(field, value=auto_expiry, disabled=True)
-                kwargs[field] = auto_expiry
-            else:
-                kwargs[field] = _render_field(col, field, default)
+            n_cols = len(spec["defaults"]) + (1 if underlying_price is not None else 0) + (0 if is_future else 1)
+            field_cols = st.columns(n_cols)
 
-            if field == "quantity" and underlying_price is not None:
-                # A Future's own price is its Underlying -- there is no
-                # separate Entry Price for a Future.
-                underlying_override = field_cols[col_idx].number_input(
-                    "Underlying", value=float(underlying_price),
-                    key=f"underlying_display_{current_contract}",
+            kwargs = {}
+            underlying_override = None
+            col_idx = 0
+            for field, default in spec["defaults"].items():
+                col = field_cols[col_idx]
+                col_idx += 1
+
+                if field == "expiry_days" and auto_expiry is not None:
+                    col.number_input(field, value=auto_expiry, disabled=True)
+                    kwargs[field] = auto_expiry
+                else:
+                    kwargs[field] = _render_field(col, field, default)
+
+                if field == "quantity" and underlying_price is not None:
+                    # A Future's own price is its Underlying -- there is no
+                    # separate Entry Price for a Future.
+                    underlying_override = field_cols[col_idx].number_input(
+                        "Underlying", value=float(underlying_price),
+                        key=f"underlying_display_{current_contract}",
+                    )
+                    col_idx += 1
+
+            entry_price_input = None
+            if not is_future and underlying_price is not None:
+                # Entry Price only applies to options -- what you actually
+                # paid/received for the premium, a fixed number you type in
+                # and that never gets recalculated. Pre-filled with this
+                # leg's own computed Mark to Market (not the underlying's
+                # price) as a close starting point, same engine used for the
+                # live Mark to Market column, but still fully editable since
+                # the real fill price can differ from the model.
+                try:
+                    preview = spec["build"](**kwargs, contract=current_contract)
+                    default_entry_price = compute_model_price(
+                        preview, {"contract": current_contract}, st.session_state.market,
+                    )
+                except Exception:
+                    default_entry_price = None
+
+                entry_price_input = field_cols[col_idx].number_input(
+                    "Entry Price", value=float(default_entry_price or 0.0),
+                    key=f"entry_price_input_{current_contract}",
                 )
                 col_idx += 1
 
-        entry_price_input = None
-        if not is_future and underlying_price is not None:
-            # Entry Price only applies to options -- what you actually
-            # paid/received for the premium, a fixed number you type in
-            # and that never gets recalculated. Pre-filled with this
-            # leg's own computed Mark to Market (not the underlying's
-            # price) as a close starting point, same engine used for the
-            # live Mark to Market column, but still fully editable since
-            # the real fill price can differ from the model.
-            try:
-                preview = spec["build"](**kwargs, contract=current_contract)
-                default_entry_price = compute_model_price(
-                    preview, {"contract": current_contract}, st.session_state.market,
-                )
-            except Exception:
-                default_entry_price = None
+            with st.container(key="add_leg_btn"):
+                submitted = st.form_submit_button("Add to Portfolio")
 
-            entry_price_input = field_cols[col_idx].number_input(
-                "Entry Price", value=float(default_entry_price or 0.0),
-                key=f"entry_price_input_{current_contract}",
-            )
-            col_idx += 1
+        if submitted:
+            if current_contract is None:
+                st.error("Pick a contract first.")
+            else:
+                try:
+                    if underlying_override is not None and underlying_override != underlying_price:
+                        st.session_state.market.futures_prices[current_contract] = underlying_override
 
-        with st.container(key="add_leg_btn"):
-            submitted = st.form_submit_button("Add to Portfolio")
-
-    if submitted:
-        if current_contract is None:
-            st.error("Pick a contract first.")
-        else:
-            try:
-                if underlying_override is not None and underlying_override != underlying_price:
-                    st.session_state.market.futures_prices[current_contract] = underlying_override
-
-                kwargs["contract"] = current_contract
-                instrument = spec["build"](**kwargs)
-                st.session_state.portfolio.add(instrument)
-                st.session_state.position_meta.append({
-                    "commodity": _commodity_from_contract(current_contract),
-                    "contract": current_contract,
-                    "vol_pct": None,
-                    # Futures have no Entry Price -- their price lives
-                    # under Underlying Price instead (same value the
-                    # Underlying field above just set).
-                    "settlement_price": underlying_override if is_future else entry_price_input,
-                })
-                _autosave_portfolio()
-                st.success(f"Added {leg_type}")
-            except Exception as e:
-                st.error(str(e))
-
-    st.subheader("Manage")
-
-    mc_manage, mc_import = st.columns([1.6, 1.4])
-
-    with mc_manage:
-        with st.container(key="clear_btn"):
-            if st.button("Clear Portfolio"):
-                st.session_state.portfolio = Portfolio()
-                st.session_state.position_meta = []
-                st.session_state.csv_locked_contracts = set()
-                _autosave_portfolio()
-                st.rerun()
-
-        uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
-
-        mc_load, mc_download = st.columns(2)
-
-        with mc_load:
-            with st.container(key="file_btn_load"):
-                if uploaded is not None and st.button("Load uploaded CSV"):
-                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                        tmp.write(uploaded.getvalue())
-                        tmp_path = tmp.name
-                    st.session_state.portfolio = portfolio_from_csv(tmp_path)
-                    st.session_state.position_meta = [
-                        {
-                            "commodity": _commodity_from_contract(pos.contract),
-                            "contract": pos.contract,
-                            "vol_pct": None,
-                        }
-                        for pos in st.session_state.portfolio.positions
-                    ]
+                    kwargs["contract"] = current_contract
+                    instrument = spec["build"](**kwargs)
+                    st.session_state.portfolio.add(instrument)
+                    st.session_state.position_meta.append({
+                        "commodity": _commodity_from_contract(current_contract),
+                        "contract": current_contract,
+                        "vol_pct": None,
+                        # Futures have no Entry Price -- their price lives
+                        # under Underlying Price instead (same value the
+                        # Underlying field above just set).
+                        "settlement_price": underlying_override if is_future else entry_price_input,
+                    })
                     _autosave_portfolio()
-                    st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
+                    st.success(f"Added {leg_type}")
+                except Exception as e:
+                    st.error(str(e))
+
+        st.subheader("Manage")
+
+        mc_manage, mc_import = st.columns([1.6, 1.4])
+
+        with mc_manage:
+            with st.container(key="clear_btn"):
+                if st.button("Clear Portfolio"):
+                    st.session_state.portfolio = Portfolio()
+                    st.session_state.position_meta = []
+                    st.session_state.csv_locked_contracts = set()
+                    _autosave_portfolio()
                     st.rerun()
 
-        with mc_download:
-            with st.container(key="file_btn_download"):
-                if st.session_state.portfolio.positions:
-                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                        portfolio_to_csv(st.session_state.portfolio, tmp.name)
-                        with open(tmp.name, "rb") as f:
-                            csv_bytes = f.read()
-                    st.download_button(
-                        "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
-                    )
+            uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
 
-    with mc_import:
-        with st.container(key="daily_prop_upload_box", border=True):
+            mc_load, mc_download = st.columns(2)
 
-            st.markdown("**Daily_Prop_upload**")
-            st.caption("Bushel export -- adds to current positions.")
-
-            imported_file = st.file_uploader(
-                "Upload positions file", type="csv", key="bushel_uploader", label_visibility="collapsed"
-            )
-
-            with st.container(key="file_btn_import"):
-                if imported_file is not None and st.button("Add Imported Positions"):
-                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                        tmp.write(imported_file.getvalue())
-                        tmp_path = tmp.name
-                    try:
-                        # The saved tempfile's own name is random (not
-                        # the original "Daily_Prop_Bod_Detail_*.csv"), so
-                        # the as-of date has to come from the file the
-                        # browser actually uploaded, or options get
-                        # priced with the wrong time-to-expiry.
-                        imported = import_bushel_positions(
-                            tmp_path, as_of=daily_prop_as_of_date(imported_file.name),
-                        )
-                        for instrument, meta in imported:
-                            st.session_state.portfolio.add(instrument)
-                            st.session_state.position_meta.append(meta)
-                            # Only a Future leg's settlement_price is the
-                            # underlying contract's own price -- an Option
-                            # leg's settlement_price is that option's own
-                            # premium, a completely different number, and
-                            # must never overwrite the underlying price.
-                            if isinstance(instrument, Future) and meta.get("settlement_price") is not None:
-                                st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
-                                st.session_state.csv_locked_contracts.add(meta["contract"])
+            with mc_load:
+                with st.container(key="file_btn_load"):
+                    if uploaded is not None and st.button("Load uploaded CSV"):
+                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                            tmp.write(uploaded.getvalue())
+                            tmp_path = tmp.name
+                        st.session_state.portfolio = portfolio_from_csv(tmp_path)
+                        st.session_state.position_meta = [
+                            {
+                                "commodity": _commodity_from_contract(pos.contract),
+                                "contract": pos.contract,
+                                "vol_pct": None,
+                            }
+                            for pos in st.session_state.portfolio.positions
+                        ]
                         _autosave_portfolio()
-                        st.success(f"Added {len(imported)} imported position(s)")
+                        st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Import failed: {e}")
+
+            with mc_download:
+                with st.container(key="file_btn_download"):
+                    if st.session_state.portfolio.positions:
+                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                            portfolio_to_csv(st.session_state.portfolio, tmp.name)
+                            with open(tmp.name, "rb") as f:
+                                csv_bytes = f.read()
+                        st.download_button(
+                            "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
+                        )
+
+        with mc_import:
+            with st.container(key="daily_prop_upload_box", border=True):
+
+                st.markdown("**Daily_Prop_upload**")
+                st.caption("Bushel export -- adds to current positions.")
+
+                imported_file = st.file_uploader(
+                    "Upload positions file", type="csv", key="bushel_uploader", label_visibility="collapsed"
+                )
+
+                with st.container(key="file_btn_import"):
+                    if imported_file is not None and st.button("Add Imported Positions"):
+                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                            tmp.write(imported_file.getvalue())
+                            tmp_path = tmp.name
+                        try:
+                            # The saved tempfile's own name is random (not
+                            # the original "Daily_Prop_Bod_Detail_*.csv"), so
+                            # the as-of date has to come from the file the
+                            # browser actually uploaded, or options get
+                            # priced with the wrong time-to-expiry.
+                            imported = import_bushel_positions(
+                                tmp_path, as_of=daily_prop_as_of_date(imported_file.name),
+                            )
+                            for instrument, meta in imported:
+                                st.session_state.portfolio.add(instrument)
+                                st.session_state.position_meta.append(meta)
+                                # Only a Future leg's settlement_price is the
+                                # underlying contract's own price -- an Option
+                                # leg's settlement_price is that option's own
+                                # premium, a completely different number, and
+                                # must never overwrite the underlying price.
+                                if isinstance(instrument, Future) and meta.get("settlement_price") is not None:
+                                    st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
+                                    st.session_state.csv_locked_contracts.add(meta["contract"])
+                            _autosave_portfolio()
+                            st.success(f"Added {len(imported)} imported position(s)")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Import failed: {e}")
 
     st.divider()
     st.subheader("Current Positions")
