@@ -40,6 +40,7 @@ from vol_calculator import (
     import_bushel_positions,
     import_cqg_quotes,
     compute_model_price,
+    daily_prop_as_of_date,
 )
 
 st.set_page_config(page_title="Vol Calculator", layout="wide")
@@ -783,7 +784,14 @@ with st.container(border=True):
                         tmp.write(imported_file.getvalue())
                         tmp_path = tmp.name
                     try:
-                        imported = import_bushel_positions(tmp_path)
+                        # The saved tempfile's own name is random (not
+                        # the original "Daily_Prop_Bod_Detail_*.csv"), so
+                        # the as-of date has to come from the file the
+                        # browser actually uploaded, or options get
+                        # priced with the wrong time-to-expiry.
+                        imported = import_bushel_positions(
+                            tmp_path, as_of=daily_prop_as_of_date(imported_file.name),
+                        )
                         for instrument, meta in imported:
                             st.session_state.portfolio.add(instrument)
                             st.session_state.position_meta.append(meta)

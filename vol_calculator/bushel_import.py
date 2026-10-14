@@ -30,6 +30,13 @@ def latest_daily_prop_file(folder):
 
     return max(candidates, key=lambda c: c[0])[1]
 
+
+def daily_prop_as_of_date(path):
+    """Extracts the file's own date from a "Daily_Prop_Bod_Detail_YYYY_MM_DD.csv" filename, or None if the name doesn't match (e.g. a browser-upload tempfile -- callers should pass the ORIGINAL filename here, not the saved tempfile's path)."""
+
+    m = _DAILY_PROP_FILENAME.search(os.path.basename(path))
+    return date(int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
 # Position of each field in the vendor export, by Excel column letter --
 # mapping is positional (not by header name), since header text is not
 # reliable across exports. Update this dict if the template changes.
@@ -86,7 +93,7 @@ def _year_code(value):
     return y if y > 100 else 2000 + y
 
 
-def import_bushel_positions(path):
+def import_bushel_positions(path, as_of=None):
     """
     Reads a Bushel-style export (CSV) positionally by Excel column letter,
     keeping only Corn/Soybean/SRW Wheat rows (Instrument in C/S/W).
@@ -95,6 +102,17 @@ def import_bushel_positions(path):
     Settlement Price (column V) for each row, so the caller can populate
     Market.futures_prices for any newly-seen contract.
 
+    Option expiry_days is measured from the file's own as-of date, not
+    whenever this happens to run -- an options book priced from a file
+    that's a few days (or weeks) old must still use that file's own date,
+    or every option's time value comes out wrong. as_of, given explicitly,
+    wins (for callers like a Streamlit upload where the real filename --
+    and its embedded date -- never reaches this function, since the
+    browser upload gets saved to a randomly-named tempfile first); failing
+    that, the date is parsed from `path`'s own filename (works for every
+    direct Daily_Prop_Bod_Detail_*.csv read from disk); only if neither is
+    available does this fall back to today's real date.
+
     Returns a list of (instrument, meta) tuples. meta is a plain dict --
     {"commodity", "contract", "vol_pct", "settlement_price"} -- vol_pct/
     settlement_price are display/price-seeding helpers, since Future doesn't
@@ -102,7 +120,7 @@ def import_bushel_positions(path):
     """
 
     raw = pd.read_csv(path, header=0)
-    today = date.today()
+    today = as_of or daily_prop_as_of_date(path) or date.today()
 
     results = []
 

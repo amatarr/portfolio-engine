@@ -40,7 +40,7 @@ from vol_calculator.contracts import (
     approx_option_expiry_days,
     commodity_from_contract,
 )
-from vol_calculator.bushel_import import import_bushel_positions, latest_daily_prop_file
+from vol_calculator.bushel_import import import_bushel_positions, latest_daily_prop_file, daily_prop_as_of_date
 from vol_calculator.excel_sync import (
     write_positions_table,
     read_positions_rows,
@@ -121,6 +121,7 @@ __all__ = [
     "commodity_from_contract",
     "import_bushel_positions",
     "latest_daily_prop_file",
+    "daily_prop_as_of_date",
     "write_positions_table",
     "read_positions_rows",
     "write_add_leg_block",
