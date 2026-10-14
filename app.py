@@ -39,6 +39,7 @@ from vol_calculator import (
     approx_option_expiry_days,
     import_bushel_positions,
     import_cqg_quotes,
+    compute_model_price,
 )
 
 st.set_page_config(page_title="Vol Calculator", layout="wide")
@@ -269,26 +270,38 @@ def _structure_kind(name):
     return re.sub(r"(?<!^)(?=[A-Z])", " ", kind)
 
 
-def _leg_row(leg, position_index, structure, contract, settlement_price, future_vol_pct=None):
+def _leg_row(leg, position_index, structure, contract, entry_price, market, future_vol_pct=None):
 
     if isinstance(leg, Future):
         return {
-            "#": position_index, "Contract": contract, "Settlement Price": settlement_price,
+            "#": position_index, "Contract": contract, "Entry Price": entry_price,
             "Structure": structure, "Type": "Future",
             "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None, "Vol (%)": future_vol_pct,
+            "Underlying Price": None, "Mark to Market": None,
         }
 
+    # Underlying Price/Mark to Market are always recomputed live from the
+    # current market, never copied from entry_price -- that's the whole
+    # point of distinguishing them from Entry Price.
+    try:
+        underlying_price = market.price_for(contract)
+    except (KeyError, ValueError):
+        underlying_price = None
+
+    mark_to_market = compute_model_price(leg, {"contract": contract}, market)
+
     return {
-        "#": position_index, "Contract": contract, "Settlement Price": settlement_price,
+        "#": position_index, "Contract": contract, "Entry Price": entry_price,
         "Structure": structure,
         "Type": "Call" if leg.option_type == "call" else "Put",
         "Quantity": leg.quantity, "Strike": leg.strike,
         "Expiry (d)": leg.expiry_days, "Vol (%)": leg.volatility * 100,
+        "Underlying Price": underlying_price, "Mark to Market": mark_to_market,
     }
 
 
-def _positions_table_for_commodity(portfolio, meta, commodity):
-    """Settlement Price is whatever was captured at import/add time (meta["settlement_price"]) -- a fixed snapshot, not tied to the live feed."""
+def _positions_table_for_commodity(portfolio, meta, commodity, market):
+    """Entry Price is whatever was captured at import/add time (meta["settlement_price"]) -- a fixed snapshot, not tied to the live feed. Underlying Price/Mark to Market (options only) are recomputed live every render."""
 
     rows = []
 
@@ -298,13 +311,13 @@ def _positions_table_for_commodity(portfolio, meta, commodity):
             continue
 
         contract = meta[i].get("contract") or "-"
-        settlement_price = meta[i].get("settlement_price")
+        entry_price = meta[i].get("settlement_price")
 
         if isinstance(pos, Structure):
             structure = _structure_kind(pos.name)
-            rows.extend(_leg_row(leg, i, structure, contract, settlement_price) for leg in pos.legs)
+            rows.extend(_leg_row(leg, i, structure, contract, entry_price, market) for leg in pos.legs)
         else:
-            rows.append(_leg_row(pos, i, "-", contract, settlement_price, future_vol_pct=meta[i].get("vol_pct")))
+            rows.append(_leg_row(pos, i, "-", contract, entry_price, market, future_vol_pct=meta[i].get("vol_pct")))
 
     return pd.DataFrame(rows)
 
@@ -623,10 +636,12 @@ with st.container(border=True):
 
     with st.form(f"add_{leg_type}"):
 
-        n_cols = len(spec["defaults"]) + (1 if underlying_price is not None else 0)
+        n_cols = len(spec["defaults"]) + (2 if underlying_price is not None else 0)
         field_cols = st.columns(n_cols)
 
         kwargs = {}
+        underlying_override = None
+        entry_price_input = None
         col_idx = 0
         for field, default in spec["defaults"].items():
             col = field_cols[col_idx]
@@ -639,9 +654,20 @@ with st.container(border=True):
                 kwargs[field] = _render_field(col, field, default)
 
             if field == "quantity" and underlying_price is not None:
-                field_cols[col_idx].number_input(
-                    "Underlying", value=float(underlying_price), disabled=True,
+                underlying_override = field_cols[col_idx].number_input(
+                    "Underlying", value=float(underlying_price),
                     key=f"underlying_display_{current_contract}",
+                )
+                col_idx += 1
+
+                # Entry Price is what you actually paid/received for this
+                # leg -- a fixed number you type in, never recalculated.
+                # Pre-filled with the underlying as a convenience starting
+                # point only; distinct from Underlying Price/Mark to
+                # Market, which always track the live market instead.
+                entry_price_input = field_cols[col_idx].number_input(
+                    "Entry Price", value=float(underlying_price),
+                    key=f"entry_price_input_{current_contract}",
                 )
                 col_idx += 1
 
@@ -653,6 +679,9 @@ with st.container(border=True):
             st.error("Pick a contract first.")
         else:
             try:
+                if underlying_override is not None and underlying_override != underlying_price:
+                    st.session_state.market.futures_prices[current_contract] = underlying_override
+
                 kwargs["contract"] = current_contract
                 instrument = spec["build"](**kwargs)
                 st.session_state.portfolio.add(instrument)
@@ -660,6 +689,7 @@ with st.container(border=True):
                     "commodity": _commodity_from_contract(current_contract),
                     "contract": current_contract,
                     "vol_pct": None,
+                    "settlement_price": entry_price_input,
                 })
                 _autosave_portfolio()
                 st.success(f"Added {leg_type}")
@@ -759,15 +789,17 @@ with st.container(border=True):
 
             st.markdown(f"**{group_commodity} Positions**")
 
-            table = _positions_table_for_commodity(st.session_state.portfolio, meta, group_commodity)
+            table = _positions_table_for_commodity(
+                st.session_state.portfolio, meta, group_commodity, st.session_state.market,
+            )
             selection = st.dataframe(
                 table,
                 hide_index=True,
                 width="stretch",
                 height=min(38 * (len(table) + 1), 400),
                 column_order=[
-                    "Contract", "Settlement Price", "Structure", "Type",
-                    "Quantity", "Strike", "Expiry (d)", "Vol (%)",
+                    "Contract", "Entry Price", "Underlying Price", "Mark to Market",
+                    "Structure", "Type", "Quantity", "Strike", "Expiry (d)", "Vol (%)",
                 ],
                 on_select="rerun",
                 selection_mode="multi-row",

@@ -175,9 +175,11 @@ class GreekEngine:
         delta_down = GreekEngine.delta(down_portfolio, market, contract)
 
         return (
-            delta_up
-            - delta_down
-        ) / (2 * dv)
+            (
+                delta_up
+                - delta_down
+            ) / (2 * dv)
+        ) * VOL_POINT
 
     @staticmethod
     def summary(portfolio, market, contract=None):
