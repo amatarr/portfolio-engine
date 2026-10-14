@@ -238,8 +238,6 @@ class GreekEngine:
         to_k = market.contract_multiplier / 1000
 
         return {
-            "Value ($k)": portfolio.value(market) * to_k,
-
             "Delta (contracts)": GreekEngine.delta(portfolio, market, contract),
 
             "Gamma (ΔDelta contracts/1¢/bu)": GreekEngine.gamma(portfolio, market, contract),
