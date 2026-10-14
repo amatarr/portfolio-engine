@@ -921,6 +921,31 @@ def _tab_help(text, formulas=None):
 portfolio = st.session_state.portfolio
 market = st.session_state.market
 
+# Defensive backfill: any contract a held position needs but that has
+# no price at all (a leg that got in before this existed, an autosaved
+# session from an older bug, or any other path that didn't seed one)
+# gets one try against the live feed; if that's still empty, the leg
+# is dropped rather than crashing every Greek/valuation calc on every
+# single rerun from here on, including the very next page load.
+_unpriced = [c for c in _contracts_in_portfolio(portfolio) if c not in market.futures_prices]
+if _unpriced:
+    _live_fallback = {q["contract"]: q["price"] for q in _load_live_quotes()}
+    _still_unpriced = {c for c in _unpriced if c not in _live_fallback}
+
+    for c in _unpriced:
+        if c in _live_fallback:
+            market.futures_prices[c] = _live_fallback[c]
+
+    if _still_unpriced:
+        keep_idx = [i for i, pos in enumerate(portfolio.positions) if pos.contract not in _still_unpriced]
+        portfolio.positions = [portfolio.positions[i] for i in keep_idx]
+        st.session_state.position_meta = [st.session_state.position_meta[i] for i in keep_idx]
+        _autosave_portfolio()
+        st.warning(
+            f"Removed position(s) with no price available anywhere (not in the uploaded file "
+            f"as a Future, and not live-quoted): {', '.join(sorted(_still_unpriced))}"
+        )
+
 tabs = st.tabs([
     "Greeks", "Ladders", "Surface",
     "Stress", "Strike Map", "Payoff", "Breakevens",
