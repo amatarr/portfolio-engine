@@ -521,11 +521,13 @@ def _render_quotes_box():
                     continue
 
                 # One tight inline row per contract (label + editable
-                # price) instead of a full data_editor grid -- no header
-                # row or hover toolbar per commodity, just the numbers.
+                # price + ATM IV) instead of a full data_editor grid --
+                # no header row or hover toolbar per commodity, just the
+                # numbers. ATM IV has no data source yet (kept as an
+                # empty, disabled placeholder -- not computed/wired in).
                 for code in codes:
                     price = float(_price_for(code))
-                    label_col, price_col = st.columns([1, 1])
+                    label_col, price_col, iv_col = st.columns([1, 1, 0.8])
                     label_col.markdown(f"<div style='padding-top:0.5rem'>{code}</div>", unsafe_allow_html=True)
                     # Keying on the live price forces Streamlit to treat
                     # a real tick as a new widget -- a number_input's
@@ -534,6 +536,10 @@ def _render_quotes_box():
                     edited_price = price_col.number_input(
                         code, value=price, step=0.25, format="%.2f",
                         label_visibility="collapsed", key=f"quote_price_{code}_{price:.4f}",
+                    )
+                    iv_col.text_input(
+                        f"{code} ATM IV", value="", placeholder="ATM IV",
+                        disabled=True, label_visibility="collapsed", key=f"quote_iv_{code}",
                     )
 
                     if code in st.session_state.csv_locked_contracts:
