@@ -270,19 +270,25 @@ def _structure_kind(name):
     return re.sub(r"(?<!^)(?=[A-Z])", " ", kind)
 
 
-def _leg_row(leg, position_index, structure, contract, entry_price, market, future_vol_pct=None):
+def _leg_row(leg, position_index, structure, contract, stored_price, market, future_vol_pct=None):
+    """
+    stored_price is whatever meta["settlement_price"] holds -- for a
+    Future that IS its Underlying Price (there's no separate Entry
+    Price for a Future); for an Option it's the Entry Price (CSV
+    settlement, or a manual fill price typed in at Add Leg).
+    """
 
     if isinstance(leg, Future):
         return {
-            "#": position_index, "Contract": contract, "Entry Price": entry_price,
+            "#": position_index, "Contract": contract, "Entry Price": None,
             "Structure": structure, "Type": "Future",
             "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None, "Vol (%)": future_vol_pct,
-            "Underlying Price": None, "Mark to Market": None,
+            "Underlying Price": stored_price, "Mark to Market": None,
         }
 
     # Underlying Price/Mark to Market are always recomputed live from the
-    # current market, never copied from entry_price -- that's the whole
-    # point of distinguishing them from Entry Price.
+    # current market, never copied from Entry Price -- that's the whole
+    # point of distinguishing them.
     try:
         underlying_price = market.price_for(contract)
     except (KeyError, ValueError):
@@ -291,7 +297,7 @@ def _leg_row(leg, position_index, structure, contract, entry_price, market, futu
     mark_to_market = compute_model_price(leg, {"contract": contract}, market)
 
     return {
-        "#": position_index, "Contract": contract, "Entry Price": entry_price,
+        "#": position_index, "Contract": contract, "Entry Price": stored_price,
         "Structure": structure,
         "Type": "Call" if leg.option_type == "call" else "Put",
         "Quantity": leg.quantity, "Strike": leg.strike,
@@ -301,7 +307,7 @@ def _leg_row(leg, position_index, structure, contract, entry_price, market, futu
 
 
 def _positions_table_for_commodity(portfolio, meta, commodity, market):
-    """Entry Price is whatever was captured at import/add time (meta["settlement_price"]) -- a fixed snapshot, not tied to the live feed. Underlying Price/Mark to Market (options only) are recomputed live every render."""
+    """meta["settlement_price"] is whatever was captured at import/add time -- a fixed snapshot, not tied to the live feed. _leg_row routes it to Underlying Price (Future) or Entry Price (Option). Underlying Price/Mark to Market for options are recomputed live every render."""
 
     rows = []
 
@@ -311,13 +317,13 @@ def _positions_table_for_commodity(portfolio, meta, commodity, market):
             continue
 
         contract = meta[i].get("contract") or "-"
-        entry_price = meta[i].get("settlement_price")
+        stored_price = meta[i].get("settlement_price")
 
         if isinstance(pos, Structure):
             structure = _structure_kind(pos.name)
-            rows.extend(_leg_row(leg, i, structure, contract, entry_price, market) for leg in pos.legs)
+            rows.extend(_leg_row(leg, i, structure, contract, stored_price, market) for leg in pos.legs)
         else:
-            rows.append(_leg_row(pos, i, "-", contract, entry_price, market, future_vol_pct=meta[i].get("vol_pct")))
+            rows.append(_leg_row(pos, i, "-", contract, stored_price, market, future_vol_pct=meta[i].get("vol_pct")))
 
     return pd.DataFrame(rows)
 
@@ -634,14 +640,15 @@ with st.container(border=True):
         underlying_price = st.session_state.market.futures_prices.get(current_contract)
         auto_expiry = approx_option_expiry_days(current_contract)
 
+    is_future = leg_type == "Future"
+
     with st.form(f"add_{leg_type}"):
 
-        n_cols = len(spec["defaults"]) + (2 if underlying_price is not None else 0)
+        n_cols = len(spec["defaults"]) + (1 if underlying_price is not None else 0) + (0 if is_future else 1)
         field_cols = st.columns(n_cols)
 
         kwargs = {}
         underlying_override = None
-        entry_price_input = None
         col_idx = 0
         for field, default in spec["defaults"].items():
             col = field_cols[col_idx]
@@ -654,22 +661,36 @@ with st.container(border=True):
                 kwargs[field] = _render_field(col, field, default)
 
             if field == "quantity" and underlying_price is not None:
+                # A Future's own price is its Underlying -- there is no
+                # separate Entry Price for a Future.
                 underlying_override = field_cols[col_idx].number_input(
                     "Underlying", value=float(underlying_price),
                     key=f"underlying_display_{current_contract}",
                 )
                 col_idx += 1
 
-                # Entry Price is what you actually paid/received for this
-                # leg -- a fixed number you type in, never recalculated.
-                # Pre-filled with the underlying as a convenience starting
-                # point only; distinct from Underlying Price/Mark to
-                # Market, which always track the live market instead.
-                entry_price_input = field_cols[col_idx].number_input(
-                    "Entry Price", value=float(underlying_price),
-                    key=f"entry_price_input_{current_contract}",
+        entry_price_input = None
+        if not is_future and underlying_price is not None:
+            # Entry Price only applies to options -- what you actually
+            # paid/received for the premium, a fixed number you type in
+            # and that never gets recalculated. Pre-filled with this
+            # leg's own computed Mark to Market (not the underlying's
+            # price) as a close starting point, same engine used for the
+            # live Mark to Market column, but still fully editable since
+            # the real fill price can differ from the model.
+            try:
+                preview = spec["build"](**kwargs, contract=current_contract)
+                default_entry_price = compute_model_price(
+                    preview, {"contract": current_contract}, st.session_state.market,
                 )
-                col_idx += 1
+            except Exception:
+                default_entry_price = None
+
+            entry_price_input = field_cols[col_idx].number_input(
+                "Entry Price", value=float(default_entry_price or 0.0),
+                key=f"entry_price_input_{current_contract}",
+            )
+            col_idx += 1
 
         with st.container(key="add_leg_btn"):
             submitted = st.form_submit_button("Add to Portfolio")
@@ -689,7 +710,10 @@ with st.container(border=True):
                     "commodity": _commodity_from_contract(current_contract),
                     "contract": current_contract,
                     "vol_pct": None,
-                    "settlement_price": entry_price_input,
+                    # Futures have no Entry Price -- their price lives
+                    # under Underlying Price instead (same value the
+                    # Underlying field above just set).
+                    "settlement_price": underlying_override if is_future else entry_price_input,
                 })
                 _autosave_portfolio()
                 st.success(f"Added {leg_type}")
