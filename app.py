@@ -414,11 +414,31 @@ def _format_last_updated(dt):
     return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
+def _live_quote_contracts_by_commodity(live_quotes):
+    """
+    Groups ONLY what's actually in live_quotes (the Supabase/CQGXL feed)
+    by commodity -- for the Quotes box alone, which must never show a
+    contract that only exists because it was imported or added by hand
+    (e.g. a far-dated Daily Prop contract CQGXL doesn't quote).
+    """
+
+    contracts_by_commodity = {name: [] for name in COMMODITIES.keys()}
+
+    for q in live_quotes:
+        if q["commodity"] in contracts_by_commodity:
+            contracts_by_commodity[q["commodity"]].append(q["contract"])
+
+    return contracts_by_commodity
+
+
 def _build_contracts_by_commodity(live_quotes):
     """
     Groups known contracts by commodity -- live quotes first, then any
     contract already tracked in Market that the live feed doesn't cover
-    (e.g. manually added earlier), so it doesn't silently disappear.
+    (e.g. manually added earlier), so it doesn't silently disappear. Used
+    for the Add Leg dropdown and other places that need every contract
+    in play, not just the live-quoted ones -- NOT for the Quotes box
+    itself, which uses _live_quote_contracts_by_commodity instead.
     """
 
     contracts_by_commodity = {name: [] for name in COMMODITIES.keys()}
@@ -447,7 +467,7 @@ def _render_quotes_box():
 
     live_quotes = _load_live_quotes()
     quote_price_lookup = {q["contract"]: q["price"] for q in live_quotes}
-    contracts_by_commodity = _build_contracts_by_commodity(live_quotes)
+    contracts_by_commodity = _live_quote_contracts_by_commodity(live_quotes)
 
     with st.container(key="cqg_quotes_box", border=True):
 
