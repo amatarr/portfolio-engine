@@ -23,7 +23,7 @@ from vol_calculator import (
 from vol_calculator.instruments import AmericanOption
 from vol_calculator.excel_sync import POSITIONS_HEADERS, ADD_LEG_TYPES, _position_row, _row_to_instrument
 from vol_calculator.xlwings_sync import (
-    xw_write_data_block, xw_write_data_value, xw_read_data_value,
+    xw_write_data_block, xw_read_data_block, xw_write_data_value, xw_read_data_value,
     xw_read_manual_legs, xw_write_manual_legs,
     xw_read_add_leg_inputs, xw_clear_add_leg_inputs,
     xw_read_future_spot, xw_read_interest_rate,
@@ -284,6 +284,36 @@ def add_leg():
     else:
         summary = f"{leg_type} ({len(new_rows)} legs) on {inputs.get('contract')}"
     xw_write_data_value(wb, "AddLegStatus", f"{verb} {summary}")
+    wb.save()
+
+
+def remove_legs(rows):
+    """
+    Removes the Manual legs shown at the given Positions-table rows (a
+    comma-separated string; 1 = the first leg under the header), as
+    picked by the RemoveSelectedLegs macro. Daily Prop legs are left in
+    place: they come back from the Daily Prop file on every refresh.
+    """
+
+    wb = _get_workbook()
+    picked = sorted({int(r) for r in rows.split(",") if r.strip()})
+
+    # Positions lists every Daily Prop leg first, then the Manual legs in
+    # the same order they're stored in ManualLegs.
+    shown = xw_read_data_block(wb, "Positions")[1:]
+    n_daily = sum(1 for row in shown if row[-1] != "Manual")
+    in_table = [i for i in picked if 1 <= i <= len(shown)]
+    drop = {i - 1 - n_daily for i in in_table if shown[i - 1][-1] == "Manual"}
+    skipped = len(in_table) - len(drop)
+
+    manual = xw_read_manual_legs(wb)
+    xw_write_manual_legs(wb, [leg for k, leg in enumerate(manual) if k not in drop])
+    _refresh()
+
+    message = f"Removed {len(drop)} leg(s)."
+    if skipped:
+        message += f" {skipped} Daily Prop leg(s) kept -- they come from the Daily Prop file."
+    xw_write_data_value(wb, "AddLegStatus", message)
     wb.save()
 
 

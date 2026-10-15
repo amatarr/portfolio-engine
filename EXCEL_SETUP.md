@@ -11,7 +11,7 @@ collects everything; Python does the maths when you press a button.
 | `Position_Analysis.xlsm` | The workbook. Open it from **this** folder, since the buttons look for the Python files next to it. |
 | `xlwings_refresh.py` | What the buttons run: reads the book, prices it, writes the results into the workbook. |
 | `vol_calculator/` | The pricing engine: instruments, Black-76 pricing, Greeks, scenarios, Daily Prop import, CME expiry calendar. |
-| `vba/AddLegUI.bas` | Readable copy of the Add Leg autofill macro that lives inside the workbook. |
+| `vba/` | Readable copies of the macros inside the workbook: `AddLegUI.bas` (Add Leg autofill) and `PositionsUI.bas` (Remove selected legs). |
 | `Daily prop/` | Put the Daily Prop file here (see below). |
 | `requirements.txt` | Python packages to install. |
 
@@ -52,8 +52,12 @@ collects everything; Python does the maths when you press a button.
   *Add Leg*. Structures (spreads, straddles, butterflies…) are added as
   their individual Call/Put legs. Leaving *Entry price* blank uses the
   current Mark to Market.
-- **Clear Portfolio** (Alt+F8 → `ClearPortfolio`) removes manually added
-  legs. Daily Prop legs come back on the next refresh.
+- **Removing legs:** the Positions table is one formula, so its rows can't be
+  deleted directly. Select the row(s), using any cell in each, and click
+  *Remove selected legs*. Only manually added legs can be removed, because
+  Daily Prop legs come back from the file on every refresh.
+- **Clear Portfolio** (Alt+F8 → `ClearPortfolio`) removes all manually added
+  legs at once.
 - **Prices:** a live CQGXL quote always wins over the Daily Prop settlement.
   Daily Prop is only used for contracts the watchlist doesn't quote.
 
