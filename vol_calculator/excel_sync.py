@@ -9,6 +9,9 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from vol_calculator.instruments import Future, AmericanOption
 from vol_calculator.pricing import AmericanOptionPricer
 from vol_calculator.greeks import GreekEngine
+from vol_calculator.structures import (
+    call_spread, put_spread, straddle, strangle, butterfly, collar, calendar_spread,
+)
 from vol_calculator.scenarios import (
     spot_ladder,
     vol_ladder,
@@ -212,21 +215,45 @@ def read_interest_rate(ws, fallback_rate=0.039, value_cell=INTEREST_RATE_VALUE_C
 ADD_LEG_LABEL_CELL = "N13"
 ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL = "N14", "O14"
 ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL = "N15", "O15"
+# Quantity 2 is Collar's call_qty only (Quantity itself doubles as
+# Collar's put_qty) -- blank/unused for every other type.
 ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL = "N16", "O16"
-ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL = "N17", "O17"
-ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL = "N18", "O18"
-ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL = "N19", "O19"
-# Entry Price -- options only (ignored for a Future, same as the
-# Positions table); left blank, this leg's Entry Price falls back to
-# its Mark to Market once computed, same fallback the Positions table
-# itself uses for a Daily Prop row with no settlement.
-ADD_LEG_ENTRY_PRICE_LABEL_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL = "N20", "O20"
-ADD_LEG_STATUS_CELL = "N21"
+ADD_LEG_QUANTITY2_LABEL_CELL, ADD_LEG_QUANTITY2_VALUE_CELL = "N17", "O17"
+# Strike 1/2/3 are generic -- which named parameter they map to depends
+# on Type (e.g. Call Spread: Strike 1/2 = k_long/k_short; Butterfly:
+# Strike 1/2/3 = k1/k2/k3). See build_manual_row.
+ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL = "N18", "O18"
+ADD_LEG_STRIKE2_LABEL_CELL, ADD_LEG_STRIKE2_VALUE_CELL = "N19", "O19"
+ADD_LEG_STRIKE3_LABEL_CELL, ADD_LEG_STRIKE3_VALUE_CELL = "N20", "O20"
+# Expiry 2 is Calendar Spread's far_expiry_days only (Expiry itself
+# doubles as its near_expiry_days) -- blank/unused otherwise.
+ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL = "N21", "O21"
+ADD_LEG_EXPIRY2_LABEL_CELL, ADD_LEG_EXPIRY2_VALUE_CELL = "N22", "O22"
+# Vol 1/2/3 -- same generic-slot idea as Strike 1/2/3.
+ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL = "N23", "O23"
+ADD_LEG_VOL2_LABEL_CELL, ADD_LEG_VOL2_VALUE_CELL = "N24", "O24"
+ADD_LEG_VOL3_LABEL_CELL, ADD_LEG_VOL3_VALUE_CELL = "N25", "O25"
+# Option Type -- only Butterfly and Calendar Spread need this (every
+# other structure already fixes call vs put per leg structurally).
+ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL = "N26", "O26"
+# Entry Price -- a single Call/Put only (ignored for a Future and for
+# every multi-leg structure, whose decomposed legs always fall back to
+# their own Mark to Market instead -- there's no one typed-in price to
+# split across several legs). Left blank, falls back to Mark to Market
+# once computed, same fallback the Positions table itself uses for a
+# Daily Prop row with no settlement.
+ADD_LEG_ENTRY_PRICE_LABEL_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL = "N27", "O27"
+ADD_LEG_STATUS_CELL = "N28"
 
-# Direct leg types -- no more generic "American Option" + a separate
-# Call/Put selector; Call/Put are themselves the type, matching what
-# the Positions table's own Type column already shows.
-ADD_LEG_TYPES = ["Future", "Call", "Put"]
+# Direct leg types -- Call/Put are themselves the type (no generic
+# "American Option" + separate selector), matching what the Positions
+# table's own Type column already shows; the 7 multi-leg structures
+# match Streamlit's own LEG_BUILDERS, decomposed into individual
+# Call/Put/Future Positions rows on write (see build_manual_row).
+ADD_LEG_TYPES = [
+    "Future", "Call", "Put", "Call Spread", "Put Spread", "Straddle",
+    "Strangle", "Butterfly", "Collar", "Calendar Spread",
+]
 
 # Visually separates the Add Leg block from the plain, unstyled
 # Positions table it sits below -- a colored header, bold labels and
@@ -245,9 +272,16 @@ _ADD_LEG_ROWS = [
     (ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL),
     (ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL),
     (ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL),
+    (ADD_LEG_QUANTITY2_LABEL_CELL, ADD_LEG_QUANTITY2_VALUE_CELL),
     (ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL),
+    (ADD_LEG_STRIKE2_LABEL_CELL, ADD_LEG_STRIKE2_VALUE_CELL),
+    (ADD_LEG_STRIKE3_LABEL_CELL, ADD_LEG_STRIKE3_VALUE_CELL),
     (ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL),
+    (ADD_LEG_EXPIRY2_LABEL_CELL, ADD_LEG_EXPIRY2_VALUE_CELL),
     (ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL),
+    (ADD_LEG_VOL2_LABEL_CELL, ADD_LEG_VOL2_VALUE_CELL),
+    (ADD_LEG_VOL3_LABEL_CELL, ADD_LEG_VOL3_VALUE_CELL),
+    (ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL),
     (ADD_LEG_ENTRY_PRICE_LABEL_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL),
 ]
 
@@ -277,7 +311,7 @@ def _style_add_leg_block(ws):
         ws[value_cell].fill = _ADD_LEG_INPUT_FILL
         ws[value_cell].border = _ADD_LEG_THIN_BORDER
 
-    ws.merge_cells(f"{ADD_LEG_STATUS_CELL}:O21")
+    ws.merge_cells(f"{ADD_LEG_STATUS_CELL}:O28")
     ws[ADD_LEG_STATUS_CELL].fill = _ADD_LEG_STATUS_FILL
     ws[ADD_LEG_STATUS_CELL].font = _ADD_LEG_STATUS_FONT
     ws[ADD_LEG_STATUS_CELL].alignment = Alignment(wrap_text=True, vertical="center")
@@ -285,32 +319,45 @@ def _style_add_leg_block(ws):
 
 
 def write_add_leg_block(ws, contracts):
-    """Add Leg input cells + dropdowns -- v1 covers Future, Call and Put only (the only types real Daily Prop data ever contains)."""
+    """Add Leg input cells + dropdowns -- Future, Call, Put, and the 7 multi-leg structures, matching Streamlit's LEG_BUILDERS."""
 
-    # This block has moved columns several times across this project's
-    # history -- a merged cell left over from an earlier position can
-    # overlap a newly-merged range and strand a written value in the OLD
-    # merge's anchor cell instead of the new one (confirmed live on the
-    # xlwings path). Unmerging anything overlapping the area this block
-    # has ever occupied, before writing anything, guarantees a clean
-    # slate every refresh.
+    # Only the title (row 13) and status (row 28) cells are ever
+    # merged -- a merged cell left over from an earlier column position
+    # (this block has moved several times across this project's
+    # history) can overlap a newly-merged range and strand a written
+    # value in the OLD merge's anchor cell instead of the new one
+    # (confirmed live on the xlwings path). Unmerging/clearing just
+    # those two rows across every column this block has ever occupied,
+    # before writing anything, guarantees a clean slate every refresh
+    # -- WITHOUT touching rows 14-27, which are plain (never-merged)
+    # input cells: wiping those too would destroy whatever the user
+    # just typed on every single refresh, including mid-way through an
+    # Add Leg submission that then hits a transient error, turning a
+    # retry into a confusing false validation failure instead of a
+    # clean retry.
     debris_cols = range(10, 16)  # J-O
     for merged_range in list(ws.merged_cells.ranges):
-        if merged_range.min_row <= 21 and merged_range.max_row >= 13 and \
-                merged_range.min_col <= 15 and merged_range.max_col >= 10:
+        if merged_range.min_row in (13, 28) and merged_range.min_col <= 15 and merged_range.max_col >= 10:
             ws.unmerge_cells(str(merged_range))
-    for row in range(13, 22):
+    for row in (13, 28):
         for col in debris_cols:
             ws.cell(row=row, column=col, value=None)
 
     ws[ADD_LEG_LABEL_CELL] = "ADD LEG"
     ws[ADD_LEG_TYPE_LABEL_CELL] = "Type:"
-    ws[ADD_LEG_CONTRACT_LABEL_CELL] = "Contract:"
-    ws[ADD_LEG_QUANTITY_LABEL_CELL] = "Quantity:"
-    ws[ADD_LEG_STRIKE_LABEL_CELL] = "Strike (blank for Future):"
-    ws[ADD_LEG_EXPIRY_LABEL_CELL] = "Expiry d (blank=auto):"
-    ws[ADD_LEG_VOL_LABEL_CELL] = "Vol % (blank for Future):"
-    ws[ADD_LEG_ENTRY_PRICE_LABEL_CELL] = "Entry Price (blank = Mark to Mkt, options only):"
+    ws[ADD_LEG_CONTRACT_LABEL_CELL] = "Contract (underlying):"
+    ws[ADD_LEG_QUANTITY_LABEL_CELL] = "Quantity (Collar: Put Qty):"
+    ws[ADD_LEG_QUANTITY2_LABEL_CELL] = "Quantity 2 (Collar: Call Qty):"
+    ws[ADD_LEG_STRIKE_LABEL_CELL] = "Strike 1 (k1/k_long/k_put):"
+    ws[ADD_LEG_STRIKE2_LABEL_CELL] = "Strike 2 (k2/k_short/k_call):"
+    ws[ADD_LEG_STRIKE3_LABEL_CELL] = "Strike 3 (Butterfly k3 only):"
+    ws[ADD_LEG_EXPIRY_LABEL_CELL] = "Expiry d (blank=auto; Calendar: near):"
+    ws[ADD_LEG_EXPIRY2_LABEL_CELL] = "Expiry d 2 (Calendar Spread far only):"
+    ws[ADD_LEG_VOL_LABEL_CELL] = "Vol % 1 (vol/vol_long/vol_call/vol_put/vol1/vol_near):"
+    ws[ADD_LEG_VOL2_LABEL_CELL] = "Vol % 2 (vol_short/vol_put/vol_call/vol2/vol_far):"
+    ws[ADD_LEG_VOL3_LABEL_CELL] = "Vol % 3 (Butterfly vol3 only):"
+    ws[ADD_LEG_OPTION_TYPE_LABEL_CELL] = "Option Type (Butterfly/Calendar Spread only):"
+    ws[ADD_LEG_ENTRY_PRICE_LABEL_CELL] = "Entry Price (blank = Mark to Mkt; single Call/Put only):"
 
     if ws[ADD_LEG_TYPE_VALUE_CELL].value not in ADD_LEG_TYPES:
         ws[ADD_LEG_TYPE_VALUE_CELL] = ADD_LEG_TYPES[0]
@@ -318,6 +365,10 @@ def write_add_leg_block(ws, contracts):
     type_dv = DataValidation(type="list", formula1=f'"{",".join(ADD_LEG_TYPES)}"', allow_blank=False)
     ws.add_data_validation(type_dv)
     type_dv.add(ws[ADD_LEG_TYPE_VALUE_CELL])
+
+    option_type_dv = DataValidation(type="list", formula1='"call,put"', allow_blank=True)
+    ws.add_data_validation(option_type_dv)
+    option_type_dv.add(ws[ADD_LEG_OPTION_TYPE_VALUE_CELL])
 
     if contracts:
         if ws[ADD_LEG_CONTRACT_VALUE_CELL].value not in contracts:
@@ -335,34 +386,47 @@ def read_add_leg_inputs(ws):
         "type": ws[ADD_LEG_TYPE_VALUE_CELL].value,
         "contract": ws[ADD_LEG_CONTRACT_VALUE_CELL].value,
         "quantity": ws[ADD_LEG_QUANTITY_VALUE_CELL].value,
+        "quantity2": ws[ADD_LEG_QUANTITY2_VALUE_CELL].value,
         "strike": ws[ADD_LEG_STRIKE_VALUE_CELL].value,
+        "strike2": ws[ADD_LEG_STRIKE2_VALUE_CELL].value,
+        "strike3": ws[ADD_LEG_STRIKE3_VALUE_CELL].value,
         "expiry_days": ws[ADD_LEG_EXPIRY_VALUE_CELL].value,
+        "expiry_days2": ws[ADD_LEG_EXPIRY2_VALUE_CELL].value,
         "vol_pct": ws[ADD_LEG_VOL_VALUE_CELL].value,
+        "vol_pct2": ws[ADD_LEG_VOL2_VALUE_CELL].value,
+        "vol_pct3": ws[ADD_LEG_VOL3_VALUE_CELL].value,
+        "option_type": ws[ADD_LEG_OPTION_TYPE_VALUE_CELL].value,
         "entry_price": ws[ADD_LEG_ENTRY_PRICE_VALUE_CELL].value,
     }
 
 
 def clear_add_leg_inputs(ws):
     for cell in (
-        ADD_LEG_QUANTITY_VALUE_CELL, ADD_LEG_STRIKE_VALUE_CELL,
-        ADD_LEG_EXPIRY_VALUE_CELL, ADD_LEG_VOL_VALUE_CELL,
-        ADD_LEG_ENTRY_PRICE_VALUE_CELL,
+        ADD_LEG_QUANTITY_VALUE_CELL, ADD_LEG_QUANTITY2_VALUE_CELL,
+        ADD_LEG_STRIKE_VALUE_CELL, ADD_LEG_STRIKE2_VALUE_CELL, ADD_LEG_STRIKE3_VALUE_CELL,
+        ADD_LEG_EXPIRY_VALUE_CELL, ADD_LEG_EXPIRY2_VALUE_CELL,
+        ADD_LEG_VOL_VALUE_CELL, ADD_LEG_VOL2_VALUE_CELL, ADD_LEG_VOL3_VALUE_CELL,
+        ADD_LEG_OPTION_TYPE_VALUE_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL,
     ):
         ws[cell] = None
 
 
 def build_manual_row(inputs, commodity_lookup, auto_expiry_fn):
     """
-    Validates Add Leg's raw input dict and turns it into a POSITIONS_
-    HEADERS-shaped {header: value} row, Source="Manual". Raises ValueError
-    with a human-readable message on anything missing/invalid -- the
-    caller is expected to surface that directly (e.g. write it into a
-    status cell), not crash the whole refresh.
+    Validates Add Leg's raw input dict and turns it into a LIST of
+    POSITIONS_HEADERS-shaped {header: value} rows, Source="Manual" --
+    one row for Future/Call/Put, 2+ rows for any multi-leg structure
+    (same as Streamlit: a Straddle shows up in the Positions table as
+    its own Call row + Put row, not one "Straddle" row -- there's no
+    separate structure-level row or column). Raises ValueError with a
+    human-readable message on anything missing/invalid -- the caller is
+    expected to surface that directly (e.g. write it into a status
+    cell), not crash the whole refresh.
 
     commodity_lookup: contract -> commodity, e.g. app.py's
     _commodity_from_contract. auto_expiry_fn: contract -> approx expiry
     days, e.g. vol_calculator.contracts.approx_option_expiry_days --
-    used only when expiry_days is left blank for an option.
+    used only when expiry_days is left blank for an option/structure.
     """
 
     leg_type = inputs.get("type")
@@ -373,48 +437,129 @@ def build_manual_row(inputs, commodity_lookup, auto_expiry_fn):
     if not contract:
         raise ValueError("Pick a Contract.")
 
-    quantity = inputs.get("quantity")
-    if quantity in (None, ""):
-        raise ValueError("Quantity is required.")
-
     commodity = commodity_lookup(contract)
 
+    def _required(key, label):
+        value = inputs.get(key)
+        if value in (None, ""):
+            raise ValueError(f"{label} is required for a {leg_type}.")
+        return float(value)
+
+    def _leg_rows(*instruments):
+        meta = {"commodity": commodity, "contract": contract, "vol_pct": None, "settlement_price": None}
+        return [dict(zip(POSITIONS_HEADERS, _position_row(leg, meta, source="Manual"))) for leg in instruments]
+
+    quantity = _required("quantity", "Quantity")
+
     if leg_type == "Future":
-        return {
-            "Contract": contract, "Commodity": commodity, "Type": "Future",
-            "Quantity": float(quantity), "Strike": None, "Expiry (d)": None,
-            "Vol (%)": None, "Entry Price": None, "Underlying Price": None,
-            "Mark to Market": None, "Source": "Manual",
-        }
+        return _leg_rows(Future(quantity=quantity, contract=contract))
 
-    # leg_type is "Call" or "Put" directly (checked against ADD_LEG_TYPES above).
-    strike = inputs.get("strike")
-    vol_pct = inputs.get("vol_pct")
+    if leg_type in ("Call", "Put"):
+        strike = _required("strike", "Strike 1")
+        vol_pct = _required("vol_pct", "Vol % 1")
 
-    if strike in (None, ""):
-        raise ValueError(f"Strike is required for a {leg_type}.")
-    if vol_pct in (None, ""):
-        raise ValueError(f"Vol (%) is required for a {leg_type}.")
+        expiry_days = inputs.get("expiry_days")
+        if expiry_days in (None, ""):
+            expiry_days = auto_expiry_fn(contract)
+            if expiry_days is None:
+                raise ValueError("Couldn't auto-compute Expiry -- enter it manually.")
 
+        instrument = AmericanOption(
+            quantity=quantity, strike=strike, expiry_days=int(expiry_days),
+            option_type="call" if leg_type == "Call" else "put",
+            volatility=vol_pct / 100, contract=contract,
+        )
+        rows = _leg_rows(instrument)
+
+        # Entry Price only applies to a single Call/Put -- left as None
+        # when not typed in, the caller fills it in with this leg's own
+        # Mark to Market once that's computed (same fallback the
+        # Positions table uses for any option with no recorded Entry
+        # Price), rather than defaulting to 0 here.
+        entry_price = inputs.get("entry_price")
+        if entry_price not in (None, ""):
+            rows[0]["Entry Price"] = float(entry_price)
+        return rows
+
+    # A multi-leg structure -- Strike 1/Vol % 1 and Expiry (d) are
+    # shared entry points reused across every structure type; which
+    # named parameter they map to depends on which one is selected.
     expiry_days = inputs.get("expiry_days")
     if expiry_days in (None, ""):
         expiry_days = auto_expiry_fn(contract)
         if expiry_days is None:
             raise ValueError("Couldn't auto-compute Expiry -- enter it manually.")
+    expiry_days = int(expiry_days)
 
-    entry_price = inputs.get("entry_price")
+    strike = _required("strike", "Strike 1")
+    vol_pct = _required("vol_pct", "Vol % 1")
 
-    return {
-        "Contract": contract, "Commodity": commodity, "Type": leg_type,
-        "Quantity": float(quantity), "Strike": float(strike),
-        "Expiry (d)": int(expiry_days), "Vol (%)": float(vol_pct),
-        # Entry Price left as None when not typed in -- the caller fills
-        # it in with this leg's own Mark to Market once that's computed
-        # (same fallback the Positions table uses for any option with
-        # no recorded Entry Price), rather than defaulting to 0 here.
-        "Entry Price": float(entry_price) if entry_price not in (None, "") else None,
-        "Underlying Price": None, "Mark to Market": None, "Source": "Manual",
-    }
+    if leg_type in ("Call Spread", "Put Spread"):
+        strike2 = _required("strike2", "Strike 2")
+        vol_pct2 = _required("vol_pct2", "Vol % 2")
+        builder = call_spread if leg_type == "Call Spread" else put_spread
+        structure = builder(
+            quantity=quantity, k_long=strike, k_short=strike2, expiry_days=expiry_days,
+            vol_long=vol_pct / 100, vol_short=vol_pct2 / 100, contract=contract,
+        )
+
+    elif leg_type == "Straddle":
+        vol_pct2 = _required("vol_pct2", "Vol % 2")
+        structure = straddle(
+            quantity=quantity, strike=strike, expiry_days=expiry_days,
+            vol_call=vol_pct / 100, vol_put=vol_pct2 / 100, contract=contract,
+        )
+
+    elif leg_type == "Strangle":
+        strike2 = _required("strike2", "Strike 2")
+        vol_pct2 = _required("vol_pct2", "Vol % 2")
+        structure = strangle(
+            quantity=quantity, k_put=strike, k_call=strike2, expiry_days=expiry_days,
+            vol_put=vol_pct / 100, vol_call=vol_pct2 / 100, contract=contract,
+        )
+
+    elif leg_type == "Butterfly":
+        strike2 = _required("strike2", "Strike 2")
+        strike3 = _required("strike3", "Strike 3")
+        vol_pct2 = _required("vol_pct2", "Vol % 2")
+        vol_pct3 = _required("vol_pct3", "Vol % 3")
+        option_type = inputs.get("option_type")
+        if option_type not in ("call", "put"):
+            raise ValueError("Option Type (call/put) is required for a Butterfly.")
+        structure = butterfly(
+            quantity=quantity, k1=strike, k2=strike2, k3=strike3, expiry_days=expiry_days,
+            option_type=option_type, vol1=vol_pct / 100, vol2=vol_pct2 / 100,
+            vol3=vol_pct3 / 100, contract=contract,
+        )
+
+    elif leg_type == "Collar":
+        quantity2 = _required("quantity2", "Quantity 2 (Call Qty)")
+        strike2 = _required("strike2", "Strike 2")
+        vol_pct2 = _required("vol_pct2", "Vol % 2")
+        structure = collar(
+            put_qty=quantity, call_qty=quantity2, k_put=strike, k_call=strike2,
+            expiry_days=expiry_days, vol_put=vol_pct / 100, vol_call=vol_pct2 / 100,
+            contract=contract,
+        )
+
+    elif leg_type == "Calendar Spread":
+        expiry_days2 = inputs.get("expiry_days2")
+        if expiry_days2 in (None, ""):
+            raise ValueError("Expiry d 2 (far) is required for a Calendar Spread.")
+        vol_pct2 = _required("vol_pct2", "Vol % 2")
+        option_type = inputs.get("option_type")
+        if option_type not in ("call", "put"):
+            raise ValueError("Option Type (call/put) is required for a Calendar Spread.")
+        structure = calendar_spread(
+            quantity=quantity, strike=strike, near_expiry_days=expiry_days,
+            far_expiry_days=int(expiry_days2), option_type=option_type,
+            vol_near=vol_pct / 100, vol_far=vol_pct2 / 100, contract=contract,
+        )
+
+    else:
+        raise ValueError(f"Unsupported Type: {leg_type!r}")
+
+    return _leg_rows(*structure.legs)
 
 
 def contracts_from_imported(imported):

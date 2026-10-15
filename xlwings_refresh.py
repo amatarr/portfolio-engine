@@ -64,28 +64,31 @@ def _get_workbook():
         return xw.Book(WORKBOOK_PATH)
 
 
-def _manual_rows_from_sheet(home, extra_new_row=None):
+def _manual_rows_from_sheet(home, extra_new_rows=None):
     """
     Reads whatever Manual rows are currently on the sheet and optionally
-    appends a brand-new one that doesn't exist there yet (used by
-    add_leg() to inject its new leg before the full rebuild below sees
-    it). clear_portfolio() passes nothing and gets [].
+    appends brand-new ones that don't exist there yet (used by add_leg()
+    to inject a just-added leg -- or every decomposed leg of a just-
+    added multi-leg structure -- before the full rebuild below sees
+    them). clear_portfolio() passes nothing and gets [].
     """
 
     rows = [r for r in xw_read_positions_rows(home, start_row=13) if r.get("Source") == "Manual"]
-    if extra_new_row is not None:
-        rows.append(extra_new_row)
+    if extra_new_rows:
+        rows.extend(extra_new_rows)
     return rows
 
 
-def _refresh(extra_new_row=None, keep_manual=True):
+def _refresh(extra_new_rows=None, keep_manual=True):
     """
-    Shared body behind main()/add_leg()/clear_portfolio(). extra_new_row
-    (a single Manual row dict, Source="Manual") is folded in alongside
-    whatever Manual rows already exist, before the Positions table and
-    Portfolio are rebuilt -- so a just-added leg is priced in the same
-    pass that writes it. keep_manual=False (clear_portfolio) drops every
-    existing Manual row instead of preserving them.
+    Shared body behind main()/add_leg()/clear_portfolio(). extra_new_rows
+    (a list of Manual row dicts, Source="Manual" -- one row for a plain
+    Future/Call/Put, 2+ for a multi-leg structure's decomposed legs) is
+    folded in alongside whatever Manual rows already exist, before the
+    Positions table and Portfolio are rebuilt -- so a just-added leg is
+    priced in the same pass that writes it. keep_manual=False
+    (clear_portfolio) drops every existing Manual row instead of
+    preserving them.
     """
 
     path = latest_daily_prop_file(DAILY_PROP_FOLDER)
@@ -117,8 +120,8 @@ def _refresh(extra_new_row=None, keep_manual=True):
     imported = [(instrument, meta) for instrument, meta in imported if meta["contract"] in prices]
     contracts = contracts_from_imported(imported)
 
-    manual_rows = _manual_rows_from_sheet(home, extra_new_row) if keep_manual else (
-        [extra_new_row] if extra_new_row is not None else []
+    manual_rows = _manual_rows_from_sheet(home, extra_new_rows) if keep_manual else (
+        list(extra_new_rows) if extra_new_rows else []
     )
     manual_instruments = [_row_to_instrument(row) for row in manual_rows]
 
@@ -237,7 +240,7 @@ def main():
 
 
 def add_leg():
-    """Reads the Add Leg input block, validates it, appends it as a new Manual row, clears the inputs, and runs a full refresh with it included."""
+    """Reads the Add Leg input block, validates it, appends it as new Manual row(s) (one for a plain leg, 2+ for a multi-leg structure's decomposed legs), clears the inputs, and runs a full refresh with it included."""
 
     wb = _get_workbook()
     home = wb.sheets["Home"]
@@ -245,7 +248,7 @@ def add_leg():
     inputs = xw_read_add_leg_inputs(home)
 
     try:
-        new_row = build_manual_row(
+        new_rows = build_manual_row(
             inputs, commodity_lookup=commodity_from_contract, auto_expiry_fn=approx_option_expiry_days,
         )
     except ValueError as e:
@@ -258,14 +261,16 @@ def add_leg():
         ctypes.windll.user32.MessageBoxW(0, message, "Add Leg", 0x30)
         return
 
-    # If a previous attempt already wrote this exact row (its own
+    # If a previous attempt already wrote these exact rows (its own
     # _refresh() crashed partway through -- e.g. a transient Excel/COM
     # hiccup -- before reaching the clear-inputs step below, so the
     # inputs never got wiped and this is really a retry of the same
-    # click), don't append a second copy of it.
+    # click), don't append a second copy. Checking just the first leg
+    # is enough -- a retry resubmits identical inputs, so the first leg
+    # it builds is identical too.
     dedup_keys = ("Contract", "Type", "Quantity", "Strike", "Expiry (d)", "Vol (%)")
     already_added = any(
-        all(row.get(k) == new_row.get(k) for k in dedup_keys)
+        all(row.get(k) == new_rows[0].get(k) for k in dedup_keys)
         for row in xw_read_positions_rows(home, start_row=13)
         if row.get("Source") == "Manual"
     )
@@ -274,10 +279,15 @@ def add_leg():
     # _refresh() actually completes -- if it raises partway through,
     # the typed inputs are still there to retry instead of being
     # silently wiped with nothing saved.
-    _refresh(extra_new_row=None if already_added else new_row)
+    _refresh(extra_new_rows=None if already_added else new_rows)
     xw_clear_add_leg_inputs(home)
     verb = "Already added" if already_added else "Added"
-    home[ADD_LEG_STATUS_CELL].value = f"{verb} {new_row['Quantity']} {new_row['Contract']} ({new_row['Type']})"
+    leg_type = inputs.get("type")
+    if len(new_rows) == 1:
+        summary = f"{new_rows[0]['Quantity']} {new_rows[0]['Contract']} ({new_rows[0]['Type']})"
+    else:
+        summary = f"{leg_type} ({len(new_rows)} legs) on {inputs.get('contract')}"
+    home[ADD_LEG_STATUS_CELL].value = f"{verb} {summary}"
     wb.save()
 
 

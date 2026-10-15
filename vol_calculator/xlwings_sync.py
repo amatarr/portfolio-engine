@@ -21,9 +21,16 @@ from vol_calculator.excel_sync import (
     ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL,
     ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL,
     ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL,
+    ADD_LEG_QUANTITY2_LABEL_CELL, ADD_LEG_QUANTITY2_VALUE_CELL,
     ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL,
+    ADD_LEG_STRIKE2_LABEL_CELL, ADD_LEG_STRIKE2_VALUE_CELL,
+    ADD_LEG_STRIKE3_LABEL_CELL, ADD_LEG_STRIKE3_VALUE_CELL,
     ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL,
+    ADD_LEG_EXPIRY2_LABEL_CELL, ADD_LEG_EXPIRY2_VALUE_CELL,
     ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL,
+    ADD_LEG_VOL2_LABEL_CELL, ADD_LEG_VOL2_VALUE_CELL,
+    ADD_LEG_VOL3_LABEL_CELL, ADD_LEG_VOL3_VALUE_CELL,
+    ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL,
     ADD_LEG_ENTRY_PRICE_LABEL_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL,
     ADD_LEG_STATUS_CELL,
     ADD_LEG_TYPES,
@@ -315,9 +322,16 @@ _ADD_LEG_ROWS = [
     (ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL),
     (ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL),
     (ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL),
+    (ADD_LEG_QUANTITY2_LABEL_CELL, ADD_LEG_QUANTITY2_VALUE_CELL),
     (ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL),
+    (ADD_LEG_STRIKE2_LABEL_CELL, ADD_LEG_STRIKE2_VALUE_CELL),
+    (ADD_LEG_STRIKE3_LABEL_CELL, ADD_LEG_STRIKE3_VALUE_CELL),
     (ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL),
+    (ADD_LEG_EXPIRY2_LABEL_CELL, ADD_LEG_EXPIRY2_VALUE_CELL),
     (ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL),
+    (ADD_LEG_VOL2_LABEL_CELL, ADD_LEG_VOL2_VALUE_CELL),
+    (ADD_LEG_VOL3_LABEL_CELL, ADD_LEG_VOL3_VALUE_CELL),
+    (ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL),
     (ADD_LEG_ENTRY_PRICE_LABEL_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL),
 ]
 
@@ -353,7 +367,7 @@ def _xw_style_add_leg_block(sheet):
         value_range.color = _ADD_LEG_INPUT_RGB
         value_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
 
-    status = sheet.range(f"{ADD_LEG_STATUS_CELL}:O21")
+    status = sheet.range(f"{ADD_LEG_STATUS_CELL}:O28")
     status.api.Merge()
     status.color = _ADD_LEG_STATUS_RGB
     status.api.Font.Italic = True
@@ -364,30 +378,46 @@ def _xw_style_add_leg_block(sheet):
 def xw_write_add_leg_block(sheet, contracts):
     """Add Leg input cells + dropdowns -- live mirror of excel_sync.write_add_leg_block. Caller must have run xw_reset_dropdown_validations() once this refresh first."""
 
-    # This block has moved columns several times across this project's
-    # history (J/K, then L/M, then M/N, now N/O) -- a merged cell left
-    # over from an earlier position (e.g. an old title merge) can
-    # overlap a newly-merged range and strand a written value in the
-    # OLD merge's anchor cell instead of the new one. Unmerging and
-    # clearing the whole area the block has ever occupied, before
-    # writing anything, guarantees a clean slate every refresh.
-    debris_range = sheet.range("J13:O21")
-    debris_range.api.UnMerge()
-    debris_range.value = [[None] * 6 for _ in range(9)]
+    # Only the title (row 13) and status (row 28) cells are ever
+    # merged -- a merged cell left over from an earlier column position
+    # (this block has moved several times across this project's
+    # history) can overlap a newly-merged range and strand a written
+    # value in the OLD merge's anchor cell instead of the new one.
+    # Unmerging/clearing just those two rows across every column this
+    # block has ever occupied, before writing anything, guarantees a
+    # clean slate every refresh -- WITHOUT touching rows 14-27, which
+    # are plain (never-merged) input cells: wiping those too would
+    # destroy whatever the user just typed on every single refresh,
+    # including mid-way through an Add Leg submission that then hits a
+    # transient Excel/COM error, turning a retry into a confusing
+    # false validation failure instead of a clean retry.
+    for row in (13, 28):
+        row_range = sheet.range(f"J{row}:O{row}")
+        row_range.api.UnMerge()
+        row_range.value = [None] * 6
 
     sheet[ADD_LEG_LABEL_CELL].value = "ADD LEG"
     sheet[ADD_LEG_TYPE_LABEL_CELL].value = "Type:"
-    sheet[ADD_LEG_CONTRACT_LABEL_CELL].value = "Contract:"
-    sheet[ADD_LEG_QUANTITY_LABEL_CELL].value = "Quantity:"
-    sheet[ADD_LEG_STRIKE_LABEL_CELL].value = "Strike (blank for Future):"
-    sheet[ADD_LEG_EXPIRY_LABEL_CELL].value = "Expiry d (blank=auto):"
-    sheet[ADD_LEG_VOL_LABEL_CELL].value = "Vol % (blank for Future):"
-    sheet[ADD_LEG_ENTRY_PRICE_LABEL_CELL].value = "Entry Price (blank = Mark to Mkt, options only):"
+    sheet[ADD_LEG_CONTRACT_LABEL_CELL].value = "Contract (underlying):"
+    sheet[ADD_LEG_QUANTITY_LABEL_CELL].value = "Quantity (Collar: Put Qty):"
+    sheet[ADD_LEG_QUANTITY2_LABEL_CELL].value = "Quantity 2 (Collar: Call Qty):"
+    sheet[ADD_LEG_STRIKE_LABEL_CELL].value = "Strike 1 (k1/k_long/k_put):"
+    sheet[ADD_LEG_STRIKE2_LABEL_CELL].value = "Strike 2 (k2/k_short/k_call):"
+    sheet[ADD_LEG_STRIKE3_LABEL_CELL].value = "Strike 3 (Butterfly k3 only):"
+    sheet[ADD_LEG_EXPIRY_LABEL_CELL].value = "Expiry d (blank=auto; Calendar: near):"
+    sheet[ADD_LEG_EXPIRY2_LABEL_CELL].value = "Expiry d 2 (Calendar Spread far only):"
+    sheet[ADD_LEG_VOL_LABEL_CELL].value = "Vol % 1 (vol/vol_long/vol_call/vol_put/vol1/vol_near):"
+    sheet[ADD_LEG_VOL2_LABEL_CELL].value = "Vol % 2 (vol_short/vol_put/vol_call/vol2/vol_far):"
+    sheet[ADD_LEG_VOL3_LABEL_CELL].value = "Vol % 3 (Butterfly vol3 only):"
+    sheet[ADD_LEG_OPTION_TYPE_LABEL_CELL].value = "Option Type (Butterfly/Calendar Spread only):"
+    sheet[ADD_LEG_ENTRY_PRICE_LABEL_CELL].value = "Entry Price (blank = Mark to Mkt; single Call/Put only):"
 
     type_cell = sheet[ADD_LEG_TYPE_VALUE_CELL]
     if type_cell.value not in ADD_LEG_TYPES:
         type_cell.value = ADD_LEG_TYPES[0]
     _add_list_validation(type_cell, ADD_LEG_TYPES)
+
+    _add_list_validation(sheet[ADD_LEG_OPTION_TYPE_VALUE_CELL], ["call", "put"])
 
     if contracts:
         contract_cell = sheet[ADD_LEG_CONTRACT_VALUE_CELL]
@@ -403,18 +433,27 @@ def xw_read_add_leg_inputs(sheet):
         "type": sheet[ADD_LEG_TYPE_VALUE_CELL].value,
         "contract": sheet[ADD_LEG_CONTRACT_VALUE_CELL].value,
         "quantity": sheet[ADD_LEG_QUANTITY_VALUE_CELL].value,
+        "quantity2": sheet[ADD_LEG_QUANTITY2_VALUE_CELL].value,
         "strike": sheet[ADD_LEG_STRIKE_VALUE_CELL].value,
+        "strike2": sheet[ADD_LEG_STRIKE2_VALUE_CELL].value,
+        "strike3": sheet[ADD_LEG_STRIKE3_VALUE_CELL].value,
         "expiry_days": sheet[ADD_LEG_EXPIRY_VALUE_CELL].value,
+        "expiry_days2": sheet[ADD_LEG_EXPIRY2_VALUE_CELL].value,
         "vol_pct": sheet[ADD_LEG_VOL_VALUE_CELL].value,
+        "vol_pct2": sheet[ADD_LEG_VOL2_VALUE_CELL].value,
+        "vol_pct3": sheet[ADD_LEG_VOL3_VALUE_CELL].value,
+        "option_type": sheet[ADD_LEG_OPTION_TYPE_VALUE_CELL].value,
         "entry_price": sheet[ADD_LEG_ENTRY_PRICE_VALUE_CELL].value,
     }
 
 
 def xw_clear_add_leg_inputs(sheet):
     for cell in (
-        ADD_LEG_QUANTITY_VALUE_CELL, ADD_LEG_STRIKE_VALUE_CELL,
-        ADD_LEG_EXPIRY_VALUE_CELL, ADD_LEG_VOL_VALUE_CELL,
-        ADD_LEG_ENTRY_PRICE_VALUE_CELL,
+        ADD_LEG_QUANTITY_VALUE_CELL, ADD_LEG_QUANTITY2_VALUE_CELL,
+        ADD_LEG_STRIKE_VALUE_CELL, ADD_LEG_STRIKE2_VALUE_CELL, ADD_LEG_STRIKE3_VALUE_CELL,
+        ADD_LEG_EXPIRY_VALUE_CELL, ADD_LEG_EXPIRY2_VALUE_CELL,
+        ADD_LEG_VOL_VALUE_CELL, ADD_LEG_VOL2_VALUE_CELL, ADD_LEG_VOL3_VALUE_CELL,
+        ADD_LEG_OPTION_TYPE_VALUE_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL,
     ):
         sheet[cell].value = None
 
