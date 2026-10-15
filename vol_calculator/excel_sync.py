@@ -29,42 +29,70 @@ def clear_range(ws, min_row=1, max_row=500, min_col=1, max_col=20):
             cell.value = None
 
 
+_TABLE_LABEL_FILL = PatternFill(start_color="2E75B6", end_color="2E75B6", fill_type="solid")
+_TABLE_LABEL_FONT = Font(color="FFFFFF", bold=True, size=11)
+_TABLE_HEADER_FILL = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+_TABLE_HEADER_FONT = Font(bold=True, size=10)
+_TABLE_BAND_FILL = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
+_TABLE_BORDER = Border(*(Side(style="thin", color="D9D9D9"),) * 4)
+
+
 def write_dataframe(ws, df, start_row=1, start_col=1, label=None, include_index=False, index_label=""):
     """
-    Writes a pandas DataFrame as a plain header + rows block, starting at
-    (start_row, start_col). If label is given, it goes on its own row
-    just above the header. With include_index=True, the DataFrame's
-    index becomes the first column (for pivot-shaped outputs like
-    spot_vol_surface/strike_map, where the index itself is meaningful --
-    e.g. spot move or strike). Returns the row just after the last one
-    written, so callers can stack multiple tables on one sheet.
+    Writes a pandas DataFrame as a styled header + rows block (title bar,
+    header row, banded/bordered data rows -- same visual language as the
+    Positions table and Add Leg block), starting at (start_row,
+    start_col). If label is given, it goes on its own row just above the
+    header. With include_index=True, the DataFrame's index becomes the
+    first column (for pivot-shaped outputs like spot_vol_surface/
+    strike_map, where the index itself is meaningful -- e.g. spot move
+    or strike). Returns the row just after the last one written, so
+    callers can stack multiple tables on one sheet.
     """
 
     row = start_row
     col_offset = start_col + (1 if include_index else 0)
+    n_cols = len(df.columns) + (col_offset - start_col)
 
     if label is not None:
-        ws.cell(row=row, column=start_col, value=label)
+        ws.merge_cells(start_row=row, start_column=start_col, end_row=row, end_column=start_col + n_cols - 1)
+        title_cell = ws.cell(row=row, column=start_col, value=label)
+        title_cell.fill = _TABLE_LABEL_FILL
+        title_cell.font = _TABLE_LABEL_FONT
+        title_cell.alignment = Alignment(horizontal="center")
         row += 1
 
+    header_row = row
     if include_index:
         ws.cell(row=row, column=start_col, value=index_label)
     for col, header in enumerate(df.columns, start=col_offset):
         ws.cell(row=row, column=col, value=header)
+    for col in range(start_col, start_col + n_cols):
+        cell = ws.cell(row=header_row, column=col)
+        cell.fill = _TABLE_HEADER_FILL
+        cell.font = _TABLE_HEADER_FONT
+        cell.border = _TABLE_BORDER
     row += 1
 
-    for idx, data_row in df.iterrows():
+    for band_idx, (idx, data_row) in enumerate(df.iterrows()):
         if include_index:
             ws.cell(row=row, column=start_col, value=idx)
         for col, value in enumerate(data_row, start=col_offset):
-            ws.cell(row=row, column=col, value=round(value, 4) if isinstance(value, float) else value)
+            cell = ws.cell(row=row, column=col, value=round(value, 4) if isinstance(value, float) else value)
+            if isinstance(value, float):
+                cell.number_format = "#,##0.00"
+        for col in range(start_col, start_col + n_cols):
+            cell = ws.cell(row=row, column=col)
+            cell.border = _TABLE_BORDER
+            if band_idx % 2 == 1:
+                cell.fill = _TABLE_BAND_FILL
         row += 1
 
     return row
 
 POSITIONS_HEADERS = [
     "Contract", "Commodity", "Type", "Quantity",
-    "Strike", "Expiry (d)", "Vol (%)", "Settlement Price", "Model Price", "Source",
+    "Strike", "Expiry (d)", "Vol (%)", "Entry Price", "Underlying Price", "Mark to Market", "Source",
 ]
 
 FUTURE_SPOT_LABEL_CELL = "A10"
@@ -75,7 +103,7 @@ FUTURE_SPOT_VALUE_CELL = "B10"
 # layout, not written by any function here -- styling only, and the
 # symbol/price cells themselves (B/F/J, the live RTD-linked values) are
 # never touched, only their number format.
-_LIVE_QUOTES_BLOCKS = [(1, 3), (5, 7), (9, 10)]  # (first_col, last_col)
+_LIVE_QUOTES_BLOCKS = [(1, 3), (5, 7), (9, 11)]  # (first_col, last_col) -- each is Contract/Price/ATM IV
 _LIVE_QUOTES_HEADER_ROW = 1
 _LIVE_QUOTES_DATA_ROWS = (3, 8)
 _LIVE_QUOTES_HEADER_FILL = PatternFill(start_color="BF8F00", end_color="BF8F00", fill_type="solid")
@@ -176,18 +204,24 @@ def read_interest_rate(ws, fallback_rate=0.039, value_cell=INTEREST_RATE_VALUE_C
         return fallback_rate
 
 
-# Column M onward -- outside columns 1-10 that write_positions_table's
-# clear_range touches (Positions is 10 columns wide now that it has a
-# Model Price column, A-J), leaving K/L as a deliberate two-column
-# visual gap between the Positions table and this block.
-ADD_LEG_LABEL_CELL = "M13"
-ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL = "M14", "N14"
-ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL = "M15", "N15"
-ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL = "M16", "N16"
-ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL = "M17", "N17"
-ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL = "M18", "N18"
-ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL = "M19", "N19"
-ADD_LEG_STATUS_CELL = "M20"
+# Column N onward -- outside columns 1-11 that write_positions_table's
+# clear_range touches (Positions is 11 columns wide now that it has
+# Entry Price/Underlying Price/Mark to Market, A-K), leaving L/M as a
+# deliberate two-column visual gap between the Positions table and
+# this block.
+ADD_LEG_LABEL_CELL = "N13"
+ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL = "N14", "O14"
+ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL = "N15", "O15"
+ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL = "N16", "O16"
+ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL = "N17", "O17"
+ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL = "N18", "O18"
+ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL = "N19", "O19"
+# Entry Price -- options only (ignored for a Future, same as the
+# Positions table); left blank, this leg's Entry Price falls back to
+# its Mark to Market once computed, same fallback the Positions table
+# itself uses for a Daily Prop row with no settlement.
+ADD_LEG_ENTRY_PRICE_LABEL_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL = "N20", "O20"
+ADD_LEG_STATUS_CELL = "N21"
 
 # Direct leg types -- no more generic "American Option" + a separate
 # Call/Put selector; Call/Put are themselves the type, matching what
@@ -214,22 +248,24 @@ _ADD_LEG_ROWS = [
     (ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL),
     (ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL),
     (ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL),
+    (ADD_LEG_ENTRY_PRICE_LABEL_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL),
 ]
 
 
 def _style_add_leg_block(ws):
 
-    # K/L are now a deliberate empty gap between the Positions table and
-    # this block -- reset them back to a normal width in case an older
-    # refresh widened different columns when the block used to sit
-    # elsewhere.
+    # K/L/M are now a deliberate empty gap between the Positions table
+    # and this block -- reset them back to a normal width in case an
+    # older refresh widened different columns when the block used to
+    # sit elsewhere.
     ws.column_dimensions["J"].width = 8.43
     ws.column_dimensions["K"].width = 8.43
     ws.column_dimensions["L"].width = 8.43
-    ws.column_dimensions["M"].width = 28
-    ws.column_dimensions["N"].width = 16
+    ws.column_dimensions["M"].width = 8.43
+    ws.column_dimensions["N"].width = 28
+    ws.column_dimensions["O"].width = 16
 
-    ws.merge_cells(f"{ADD_LEG_LABEL_CELL}:N13")
+    ws.merge_cells(f"{ADD_LEG_LABEL_CELL}:O13")
     ws[ADD_LEG_LABEL_CELL].fill = _ADD_LEG_HEADER_FILL
     ws[ADD_LEG_LABEL_CELL].font = _ADD_LEG_HEADER_FONT
     ws[ADD_LEG_LABEL_CELL].alignment = Alignment(horizontal="center")
@@ -241,7 +277,7 @@ def _style_add_leg_block(ws):
         ws[value_cell].fill = _ADD_LEG_INPUT_FILL
         ws[value_cell].border = _ADD_LEG_THIN_BORDER
 
-    ws.merge_cells(f"{ADD_LEG_STATUS_CELL}:N20")
+    ws.merge_cells(f"{ADD_LEG_STATUS_CELL}:O21")
     ws[ADD_LEG_STATUS_CELL].fill = _ADD_LEG_STATUS_FILL
     ws[ADD_LEG_STATUS_CELL].font = _ADD_LEG_STATUS_FONT
     ws[ADD_LEG_STATUS_CELL].alignment = Alignment(wrap_text=True, vertical="center")
@@ -251,6 +287,22 @@ def _style_add_leg_block(ws):
 def write_add_leg_block(ws, contracts):
     """Add Leg input cells + dropdowns -- v1 covers Future, Call and Put only (the only types real Daily Prop data ever contains)."""
 
+    # This block has moved columns several times across this project's
+    # history -- a merged cell left over from an earlier position can
+    # overlap a newly-merged range and strand a written value in the OLD
+    # merge's anchor cell instead of the new one (confirmed live on the
+    # xlwings path). Unmerging anything overlapping the area this block
+    # has ever occupied, before writing anything, guarantees a clean
+    # slate every refresh.
+    debris_cols = range(10, 16)  # J-O
+    for merged_range in list(ws.merged_cells.ranges):
+        if merged_range.min_row <= 21 and merged_range.max_row >= 13 and \
+                merged_range.min_col <= 15 and merged_range.max_col >= 10:
+            ws.unmerge_cells(str(merged_range))
+    for row in range(13, 22):
+        for col in debris_cols:
+            ws.cell(row=row, column=col, value=None)
+
     ws[ADD_LEG_LABEL_CELL] = "ADD LEG"
     ws[ADD_LEG_TYPE_LABEL_CELL] = "Type:"
     ws[ADD_LEG_CONTRACT_LABEL_CELL] = "Contract:"
@@ -258,6 +310,7 @@ def write_add_leg_block(ws, contracts):
     ws[ADD_LEG_STRIKE_LABEL_CELL] = "Strike (blank for Future):"
     ws[ADD_LEG_EXPIRY_LABEL_CELL] = "Expiry d (blank=auto):"
     ws[ADD_LEG_VOL_LABEL_CELL] = "Vol % (blank for Future):"
+    ws[ADD_LEG_ENTRY_PRICE_LABEL_CELL] = "Entry Price (blank = Mark to Mkt, options only):"
 
     if ws[ADD_LEG_TYPE_VALUE_CELL].value not in ADD_LEG_TYPES:
         ws[ADD_LEG_TYPE_VALUE_CELL] = ADD_LEG_TYPES[0]
@@ -285,6 +338,7 @@ def read_add_leg_inputs(ws):
         "strike": ws[ADD_LEG_STRIKE_VALUE_CELL].value,
         "expiry_days": ws[ADD_LEG_EXPIRY_VALUE_CELL].value,
         "vol_pct": ws[ADD_LEG_VOL_VALUE_CELL].value,
+        "entry_price": ws[ADD_LEG_ENTRY_PRICE_VALUE_CELL].value,
     }
 
 
@@ -292,6 +346,7 @@ def clear_add_leg_inputs(ws):
     for cell in (
         ADD_LEG_QUANTITY_VALUE_CELL, ADD_LEG_STRIKE_VALUE_CELL,
         ADD_LEG_EXPIRY_VALUE_CELL, ADD_LEG_VOL_VALUE_CELL,
+        ADD_LEG_ENTRY_PRICE_VALUE_CELL,
     ):
         ws[cell] = None
 
@@ -328,7 +383,8 @@ def build_manual_row(inputs, commodity_lookup, auto_expiry_fn):
         return {
             "Contract": contract, "Commodity": commodity, "Type": "Future",
             "Quantity": float(quantity), "Strike": None, "Expiry (d)": None,
-            "Vol (%)": None, "Settlement Price": None, "Source": "Manual",
+            "Vol (%)": None, "Entry Price": None, "Underlying Price": None,
+            "Mark to Market": None, "Source": "Manual",
         }
 
     # leg_type is "Call" or "Put" directly (checked against ADD_LEG_TYPES above).
@@ -346,11 +402,18 @@ def build_manual_row(inputs, commodity_lookup, auto_expiry_fn):
         if expiry_days is None:
             raise ValueError("Couldn't auto-compute Expiry -- enter it manually.")
 
+    entry_price = inputs.get("entry_price")
+
     return {
         "Contract": contract, "Commodity": commodity, "Type": leg_type,
         "Quantity": float(quantity), "Strike": float(strike),
         "Expiry (d)": int(expiry_days), "Vol (%)": float(vol_pct),
-        "Settlement Price": None, "Source": "Manual",
+        # Entry Price left as None when not typed in -- the caller fills
+        # it in with this leg's own Mark to Market once that's computed
+        # (same fallback the Positions table uses for any option with
+        # no recorded Entry Price), rather than defaulting to 0 here.
+        "Entry Price": float(entry_price) if entry_price not in (None, "") else None,
+        "Underlying Price": None, "Mark to Market": None, "Source": "Manual",
     }
 
 
@@ -389,21 +452,33 @@ def prices_from_imported(imported):
 
 
 def _position_row(instrument, meta, source):
+    """
+    Column routing matches the Streamlit Positions table exactly: a
+    Future has no Entry Price or Mark to Market of its own -- its price
+    lives under Underlying Price instead. An Option's Entry Price falls
+    back to its Mark to Market when nothing was recorded for it (a
+    blank Daily Prop settlement, or a Manual leg added before an Entry
+    Price existed), rather than showing a blank cell.
+    """
 
     if isinstance(instrument, Future):
         return [
             meta["contract"], meta["commodity"], "Future", instrument.quantity,
-            None, None, meta.get("vol_pct"), meta.get("settlement_price"),
-            meta.get("model_price"), source,
+            None, None, meta.get("vol_pct"), None,
+            meta.get("settlement_price"), None, source,
         ]
 
     if isinstance(instrument, AmericanOption):
+        entry_price = meta.get("settlement_price")
+        if entry_price is None:
+            entry_price = meta.get("model_price")
+
         return [
             meta["contract"], meta["commodity"],
             "Call" if instrument.option_type == "call" else "Put",
             instrument.quantity, instrument.strike, instrument.expiry_days,
-            round(instrument.volatility * 100, 2), meta.get("settlement_price"),
-            meta.get("model_price"), source,
+            round(instrument.volatility * 100, 2), entry_price,
+            meta.get("underlying_price"), meta.get("model_price"), source,
         ]
 
     raise TypeError(f"Unsupported instrument type: {type(instrument)}")
@@ -457,6 +532,15 @@ def compute_model_price(instrument, meta, market):
     return None
 
 
+def compute_underlying_price(contract, market):
+    """An Option's Underlying Price -- the live price of the future it's actually written on, recomputed every refresh. Returns None if the contract has no price in market."""
+
+    try:
+        return round(market.price_for(contract), 4)
+    except (KeyError, ValueError):
+        return None
+
+
 def _row_to_instrument(row):
     """
     Inverse of _position_row -- turns a {header: value} dict (as read back
@@ -472,6 +556,9 @@ def _row_to_instrument(row):
 
     if leg_type == "Future":
         instrument = Future(quantity=quantity, contract=contract)
+        # A Future's own price lives under Underlying Price (it has no
+        # separate Entry Price column) -- same routing _position_row uses.
+        settlement_price = row.get("Underlying Price")
     elif leg_type in ("Call", "Put"):
         instrument = AmericanOption(
             quantity=quantity,
@@ -481,12 +568,13 @@ def _row_to_instrument(row):
             volatility=float(row.get("Vol (%)") or 0) / 100,
             contract=contract,
         )
+        settlement_price = row.get("Entry Price")
     else:
         raise ValueError(f"Unknown Type in Positions row: {leg_type!r}")
 
     meta = {
         "commodity": commodity, "contract": contract,
-        "vol_pct": None, "settlement_price": row.get("Settlement Price"),
+        "vol_pct": None, "settlement_price": settlement_price,
     }
     return instrument, meta
 
@@ -528,8 +616,9 @@ _POSITIONS_NUMBER_FORMATS = {
     5: "#,##0.00",       # Strike
     6: "0",              # Expiry (d)
     7: "0.00",           # Vol (%)
-    8: "#,##0.00",       # Settlement Price
-    9: "#,##0.00",       # Model Price
+    8: "#,##0.00",       # Entry Price
+    9: "#,##0.00",       # Underlying Price
+    10: "#,##0.00",      # Mark to Market
 }
 
 
@@ -637,13 +726,21 @@ def write_greeks_sheet(ws, portfolio, market, contracts, clear_rows=500):
 
     header = ["Contract"] + greek_names
     for col, value in enumerate(header, start=1):
-        ws.cell(row=1, column=col, value=value)
+        cell = ws.cell(row=1, column=col, value=value)
+        cell.fill = _TABLE_HEADER_FILL
+        cell.font = _TABLE_HEADER_FONT
+        cell.border = _TABLE_BORDER
 
     for i, contract in enumerate(contracts):
         dollars = GreekEngine.report_dollars(portfolio, market, contract)
         row_values = [contract] + [_round_greek(k, v) for k, v in dollars.items()]
         for col, value in enumerate(row_values, start=1):
-            ws.cell(row=2 + i, column=col, value=value)
+            cell = ws.cell(row=2 + i, column=col, value=value)
+            cell.border = _TABLE_BORDER
+            if i % 2 == 1:
+                cell.fill = _TABLE_BAND_FILL
+            if isinstance(value, float):
+                cell.number_format = "#,##0.00"
 
     return ws
 

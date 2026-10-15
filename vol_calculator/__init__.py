@@ -67,6 +67,7 @@ from vol_calculator.excel_sync import (
     build_manual_row,
     ADD_LEG_STATUS_CELL,
     compute_model_price,
+    compute_underlying_price,
 )
 from vol_calculator.cqg_quotes import import_cqg_quotes
 from vol_calculator.structures import (
@@ -132,6 +133,7 @@ __all__ = [
     "build_manual_row",
     "ADD_LEG_STATUS_CELL",
     "compute_model_price",
+    "compute_underlying_price",
     "write_greeks_sheet",
     "write_spot_vol_ladder_sheet",
     "write_heat_maps_sheet",

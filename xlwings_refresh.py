@@ -19,7 +19,9 @@ from vol_calculator import (
     fetch_latest_sofr, contracts_from_imported, prices_from_imported,
     commodity_from_contract, approx_option_expiry_days,
     build_manual_row, ADD_LEG_STATUS_CELL, compute_model_price,
+    compute_underlying_price,
 )
+from vol_calculator.instruments import AmericanOption
 from vol_calculator.excel_sync import _row_to_instrument
 from vol_calculator.instruments import Future
 from vol_calculator.xlwings_sync import (
@@ -91,16 +93,47 @@ def _refresh(extra_new_row=None, keep_manual=True):
         raise SystemExit(f"No Daily_Prop_Bod_Detail_*.csv found in {DAILY_PROP_FOLDER!r}")
 
     imported = import_bushel_positions(path)
-    contracts = contracts_from_imported(imported)
     prices = prices_from_imported(imported)
 
     wb = _get_workbook()
     home = wb.sheets["Home"]
 
+    # The Home sheet's live CQGXL watchlist -- same block
+    # push_quotes_supabase.py reads to feed Streamlit. Daily Prop's own
+    # settlement price always wins for a contract it covers (pinned,
+    # same rule as Streamlit); this only fills in a price for a contract
+    # Daily Prop doesn't have today, e.g. a brand-new leg added by hand
+    # that isn't in the current book yet.
+    live_quotes = xw_read_live_quotes(home)
+    live_prices = {q["contract"]: q["price"] for q in live_quotes}
+    for contract, price in live_prices.items():
+        prices.setdefault(contract, price)
+
+    # Defensive: a Daily Prop option whose underlying future doesn't
+    # also appear in today's file (e.g. a thinly-listed month) and
+    # isn't live-quoted either has no price anywhere -- same class of
+    # bug that crashed Streamlit's Greeks on an unpriced leg. Drop it
+    # here rather than let it take down this whole refresh.
+    imported = [(instrument, meta) for instrument, meta in imported if meta["contract"] in prices]
+    contracts = contracts_from_imported(imported)
+
     manual_rows = _manual_rows_from_sheet(home, extra_new_row) if keep_manual else (
         [extra_new_row] if extra_new_row is not None else []
     )
     manual_instruments = [_row_to_instrument(row) for row in manual_rows]
+
+    # Same defensive drop for Manual legs -- a leg added for a contract
+    # that then turns out unpriceable (CSV doesn't cover it today, no
+    # live quote either) can't be valued, so it can't stay in the book.
+    unpriced_manual = {
+        meta["contract"] for _, meta in manual_instruments
+        if meta["contract"] not in prices and meta.get("settlement_price") is None
+    }
+    if unpriced_manual:
+        manual_rows = [r for r in manual_rows if r["Contract"] not in unpriced_manual]
+        manual_instruments = [
+            (i, m) for i, m in manual_instruments if m["contract"] not in unpriced_manual
+        ]
 
     portfolio = Portfolio()
     for instrument, _ in imported:
@@ -124,17 +157,6 @@ def _refresh(extra_new_row=None, keep_manual=True):
     except Exception as e:
         sofr_error = f"{type(e).__name__}: {e}"
 
-    # The Home sheet's live CQGXL watchlist -- same block
-    # push_quotes_supabase.py reads to feed Streamlit. Daily Prop's own
-    # settlement price always wins for a contract it covers (pinned,
-    # same rule as Streamlit); this only fills in a price for a contract
-    # Daily Prop doesn't have today, e.g. a brand-new leg added by hand
-    # that isn't in the current book yet.
-    live_quotes = xw_read_live_quotes(home)
-    live_prices = {q["contract"]: q["price"] for q in live_quotes}
-    for contract, price in live_prices.items():
-        prices.setdefault(contract, price)
-
     # Add Leg's Contract dropdown should offer every live-quoted
     # contract too, not just today's Daily Prop book -- otherwise there
     # was never a way to add a leg for a contract Daily Prop doesn't
@@ -154,28 +176,42 @@ def _refresh(extra_new_row=None, keep_manual=True):
 
     market = Market(futures_prices=prices, interest_rate=interest_rate)
     for instrument, meta in manual_instruments:
-        if meta.get("settlement_price") is not None:
+        # Only a Future's settlement_price is the underlying contract's
+        # own price -- an Option's is its own premium (Entry Price), a
+        # completely different number that must never overwrite the
+        # underlying's market price (that would corrupt every other leg
+        # priced off the same contract).
+        if isinstance(instrument, Future) and meta.get("settlement_price") is not None:
             market.futures_prices[meta["contract"]] = meta["settlement_price"]
 
-    # A manually-added Future leg has no settlement_price of its own
+    # A manually-added Future leg has no Underlying Price of its own
     # (it isn't CSV-imported) -- backfill the Positions table's own
     # column with whatever price the engine actually resolved for it
     # (Daily Prop if it's covered, else the live CQGXL watchlist), so
     # the row isn't left blank even though it's correctly priced.
     for row, (instrument, meta) in zip(manual_rows, manual_instruments):
-        if isinstance(instrument, Future) and row.get("Settlement Price") is None:
-            row["Settlement Price"] = market.futures_prices.get(meta["contract"])
+        if isinstance(instrument, Future) and row.get("Underlying Price") is None:
+            row["Underlying Price"] = market.futures_prices.get(meta["contract"])
 
-    # "Model Price" -- every leg's own theoretical price computed fresh
-    # from its parameters (Black-76/American-exercise, same engine as
-    # Greeks), for both Daily Prop and Manual legs. Daily Prop legs'
-    # meta dicts get annotated in place so _position_row (called inside
-    # xw_write_positions_table) picks it up the same way it already
+    # "Mark to Market" and "Underlying Price" -- options only (a Future
+    # has neither, same as Streamlit); computed fresh every refresh for
+    # both Daily Prop and Manual legs. Daily Prop legs' meta dicts get
+    # annotated in place so _position_row (called inside
+    # xw_write_positions_table) picks them up the same way it already
     # does for settlement_price.
     for instrument, meta in imported:
-        meta["model_price"] = compute_model_price(instrument, meta, market)
+        if isinstance(instrument, AmericanOption):
+            meta["model_price"] = compute_model_price(instrument, meta, market)
+            meta["underlying_price"] = compute_underlying_price(meta["contract"], market)
     for row, (instrument, meta) in zip(manual_rows, manual_instruments):
-        row["Model Price"] = compute_model_price(instrument, meta, market)
+        if isinstance(instrument, AmericanOption):
+            row["Mark to Market"] = compute_model_price(instrument, meta, market)
+            row["Underlying Price"] = compute_underlying_price(meta["contract"], market)
+            # No Entry Price typed in at Add Leg time -- fall back to
+            # this leg's own Mark to Market, same fallback the Positions
+            # table uses for any option with no recorded Entry Price.
+            if row.get("Entry Price") is None:
+                row["Entry Price"] = row["Mark to Market"]
 
     xw_write_positions_table(home, imported, extra_rows=manual_rows, start_row=13)
 

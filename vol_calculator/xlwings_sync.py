@@ -24,6 +24,7 @@ from vol_calculator.excel_sync import (
     ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL,
     ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL,
     ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL,
+    ADD_LEG_ENTRY_PRICE_LABEL_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL,
     ADD_LEG_STATUS_CELL,
     ADD_LEG_TYPES,
     _position_row,
@@ -262,6 +263,7 @@ _POSITIONS_NUMBER_FORMATS = {
     7: "0.00",
     8: "#,##0.00",
     9: "#,##0.00",
+    10: "#,##0.00",
 }
 
 
@@ -316,22 +318,24 @@ _ADD_LEG_ROWS = [
     (ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL),
     (ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL),
     (ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL),
+    (ADD_LEG_ENTRY_PRICE_LABEL_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL),
 ]
 
 
 def _xw_style_add_leg_block(sheet):
     """Live mirror of excel_sync._style_add_leg_block -- same colors, via COM instead of openpyxl styles."""
 
-    # J/K are now a deliberate empty gap between the Positions table and
-    # this block -- reset them back to a normal width in case an older
-    # refresh widened them when the block used to sit there.
+    # K/L/M are now a deliberate empty gap between the Positions table
+    # and this block -- reset them back to a normal width in case an
+    # older refresh widened them when the block used to sit there.
     sheet.range("J:J").column_width = 8.43
     sheet.range("K:K").column_width = 8.43
     sheet.range("L:L").column_width = 8.43
-    sheet.range("M:M").column_width = 28
-    sheet.range("N:N").column_width = 16
+    sheet.range("M:M").column_width = 8.43
+    sheet.range("N:N").column_width = 28
+    sheet.range("O:O").column_width = 16
 
-    header = sheet.range(f"{ADD_LEG_LABEL_CELL}:N13")
+    header = sheet.range(f"{ADD_LEG_LABEL_CELL}:O13")
     header.api.Merge()
     header.color = _ADD_LEG_HEADER_RGB
     header.api.Font.Color = 0xFFFFFF
@@ -349,7 +353,7 @@ def _xw_style_add_leg_block(sheet):
         value_range.color = _ADD_LEG_INPUT_RGB
         value_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
 
-    status = sheet.range(f"{ADD_LEG_STATUS_CELL}:N20")
+    status = sheet.range(f"{ADD_LEG_STATUS_CELL}:O21")
     status.api.Merge()
     status.color = _ADD_LEG_STATUS_RGB
     status.api.Font.Italic = True
@@ -360,6 +364,17 @@ def _xw_style_add_leg_block(sheet):
 def xw_write_add_leg_block(sheet, contracts):
     """Add Leg input cells + dropdowns -- live mirror of excel_sync.write_add_leg_block. Caller must have run xw_reset_dropdown_validations() once this refresh first."""
 
+    # This block has moved columns several times across this project's
+    # history (J/K, then L/M, then M/N, now N/O) -- a merged cell left
+    # over from an earlier position (e.g. an old title merge) can
+    # overlap a newly-merged range and strand a written value in the
+    # OLD merge's anchor cell instead of the new one. Unmerging and
+    # clearing the whole area the block has ever occupied, before
+    # writing anything, guarantees a clean slate every refresh.
+    debris_range = sheet.range("J13:O21")
+    debris_range.api.UnMerge()
+    debris_range.value = [[None] * 6 for _ in range(9)]
+
     sheet[ADD_LEG_LABEL_CELL].value = "ADD LEG"
     sheet[ADD_LEG_TYPE_LABEL_CELL].value = "Type:"
     sheet[ADD_LEG_CONTRACT_LABEL_CELL].value = "Contract:"
@@ -367,6 +382,7 @@ def xw_write_add_leg_block(sheet, contracts):
     sheet[ADD_LEG_STRIKE_LABEL_CELL].value = "Strike (blank for Future):"
     sheet[ADD_LEG_EXPIRY_LABEL_CELL].value = "Expiry d (blank=auto):"
     sheet[ADD_LEG_VOL_LABEL_CELL].value = "Vol % (blank for Future):"
+    sheet[ADD_LEG_ENTRY_PRICE_LABEL_CELL].value = "Entry Price (blank = Mark to Mkt, options only):"
 
     type_cell = sheet[ADD_LEG_TYPE_VALUE_CELL]
     if type_cell.value not in ADD_LEG_TYPES:
@@ -390,6 +406,7 @@ def xw_read_add_leg_inputs(sheet):
         "strike": sheet[ADD_LEG_STRIKE_VALUE_CELL].value,
         "expiry_days": sheet[ADD_LEG_EXPIRY_VALUE_CELL].value,
         "vol_pct": sheet[ADD_LEG_VOL_VALUE_CELL].value,
+        "entry_price": sheet[ADD_LEG_ENTRY_PRICE_VALUE_CELL].value,
     }
 
 
@@ -397,8 +414,14 @@ def xw_clear_add_leg_inputs(sheet):
     for cell in (
         ADD_LEG_QUANTITY_VALUE_CELL, ADD_LEG_STRIKE_VALUE_CELL,
         ADD_LEG_EXPIRY_VALUE_CELL, ADD_LEG_VOL_VALUE_CELL,
+        ADD_LEG_ENTRY_PRICE_VALUE_CELL,
     ):
         sheet[cell].value = None
+
+
+_TABLE_LABEL_RGB = (46, 117, 182)
+_TABLE_HEADER_RGB = (217, 225, 242)
+_TABLE_BAND_RGB = (247, 247, 247)
 
 
 def xw_write_greeks_sheet(sheet, portfolio, market, contracts, clear_rows=500):
@@ -420,20 +443,47 @@ def xw_write_greeks_sheet(sheet, portfolio, market, contracts, clear_rows=500):
         dollars = GreekEngine.report_dollars(portfolio, market, contract)
         rows.append([contract] + [_round_greek(k, v) for k, v in dollars.items()])
 
-    sheet.range((2, 1)).value = rows
+    if rows:
+        sheet.range((2, 1)).value = rows
+
+    header = sheet.range((1, 1), (1, n_cols))
+    header.color = _TABLE_HEADER_RGB
+    header.api.Font.Bold = True
+    header.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+
+    for i in range(len(rows)):
+        row_range = sheet.range((2 + i, 1), (2 + i, n_cols))
+        row_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+        if i % 2 == 1:
+            row_range.color = _TABLE_BAND_RGB
+        if n_cols > 1:
+            sheet.range((2 + i, 2), (2 + i, n_cols)).number_format = "#,##0.00"
 
 
 def xw_write_dataframe(sheet, df, start_row=1, start_col=1, label=None, include_index=False, index_label=""):
-    """Bulk-writes a DataFrame as label + header + rows, one COM call per block. Mirrors excel_sync.write_dataframe's layout exactly."""
+    """Bulk-writes a DataFrame as a styled label + header + rows block (title bar, header row, banded/bordered data rows), one COM call per chunk. Mirrors excel_sync.write_dataframe's layout and look."""
 
     row = start_row
+    col_offset = start_col + (1 if include_index else 0)
+    n_cols = len(df.columns) + (col_offset - start_col)
 
     if label is not None:
         sheet.range((row, start_col)).value = label
+        title = sheet.range((row, start_col), (row, start_col + n_cols - 1))
+        title.api.Merge()
+        title.color = _TABLE_LABEL_RGB
+        title.api.Font.Color = 0xFFFFFF
+        title.api.Font.Bold = True
+        title.api.HorizontalAlignment = -4108  # xlCenter
         row += 1
 
+    header_row = row
     header = ([index_label] if include_index else []) + list(df.columns)
     sheet.range((row, start_col)).value = header
+    header_range = sheet.range((header_row, start_col), (header_row, start_col + n_cols - 1))
+    header_range.color = _TABLE_HEADER_RGB
+    header_range.api.Font.Bold = True
+    header_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
     row += 1
 
     if len(df):
@@ -444,6 +494,16 @@ def xw_write_dataframe(sheet, df, start_row=1, start_col=1, label=None, include_
                 vals = [idx] + vals
             data_rows.append(vals)
         sheet.range((row, start_col)).value = data_rows
+
+        for i in range(len(data_rows)):
+            row_range = sheet.range((row + i, start_col), (row + i, start_col + n_cols - 1))
+            row_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+            if i % 2 == 1:
+                row_range.color = _TABLE_BAND_RGB
+        sheet.range(
+            (row, col_offset), (row + len(data_rows) - 1, start_col + n_cols - 1)
+        ).number_format = "#,##0.00"
+
         row += len(data_rows)
 
     return row
@@ -533,6 +593,17 @@ def xw_write_breakevens_sheet(sheet, portfolio, market, contract, low=-15, high=
         round(numeric["upside"], 4) if numeric["upside"] is not None else None,
     ]
 
+    summary_header = sheet.range((1, 1), (1, 3))
+    summary_header.color = _TABLE_HEADER_RGB
+    summary_header.api.Font.Bold = True
+    summary_header.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+    for r in (2, 3):
+        row_range = sheet.range((r, 1), (r, 3))
+        row_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+        if r % 2 == 1:
+            row_range.color = _TABLE_BAND_RGB
+    sheet.range((2, 2), (3, 3)).number_format = "#,##0.00"
+
     delta = GreekEngine.delta(portfolio, market, contract)
     gamma = GreekEngine.gamma(portfolio, market, contract)
     theta = GreekEngine.theta(portfolio, market)
@@ -551,3 +622,15 @@ def xw_write_breakevens_sheet(sheet, portfolio, market, contract, low=-15, high=
         data_rows.append([pct, round(quad_pnl, 4), round(r["T+1d"], 4), 0])
 
     sheet.range((header_row + 1, 1)).value = data_rows
+
+    header_range = sheet.range((header_row, 1), (header_row, 4))
+    header_range.color = _TABLE_HEADER_RGB
+    header_range.api.Font.Bold = True
+    header_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+    for i in range(len(data_rows)):
+        row_range = sheet.range((header_row + 1 + i, 1), (header_row + 1 + i, 4))
+        row_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+        if i % 2 == 1:
+            row_range.color = _TABLE_BAND_RGB
+    if data_rows:
+        sheet.range((header_row + 1, 1), (header_row + len(data_rows), 4)).number_format = "#,##0.00"
