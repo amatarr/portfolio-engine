@@ -1,13 +1,12 @@
 """
-Live version of refresh_excel.py -- writes straight into the open
-Excel workbook via xlwings/COM instead of saving a closed file with
-openpyxl. If Position_Analysis.xlsx is already open, this attaches to
-that running instance (no file lock issue, changes appear instantly);
-otherwise it opens it fresh.
+Live refresh of the open Excel workbook via xlwings/COM. If
+Position_Analysis.xlsm is already open, this attaches to that running
+instance (no file lock issue, changes appear instantly); otherwise it
+opens it fresh.
 
-Only writes values, never structure -- the sheet layout, charts, and
-conditional formatting are the ones already built via openpyxl/
-refresh_excel.py and stay exactly where they are.
+Home-sheet results go to the hidden _Data sheet as plain values, and
+inputs are read from named cells -- see vol_calculator/xlwings_sync.py.
+Nothing visible on Home is written or restyled by a refresh.
 """
 
 import os
@@ -18,33 +17,33 @@ from vol_calculator import (
     Market, Portfolio, latest_daily_prop_file, import_bushel_positions,
     fetch_latest_sofr, contracts_from_imported, prices_from_imported,
     commodity_from_contract, approx_option_expiry_days,
-    build_manual_row, ADD_LEG_STATUS_CELL, compute_model_price,
-    compute_underlying_price,
+    build_manual_row, compute_model_price, compute_underlying_price,
+    option_expiry_candidates,
 )
 from vol_calculator.instruments import AmericanOption
-from vol_calculator.excel_sync import _row_to_instrument
-from vol_calculator.instruments import Future
+from vol_calculator.excel_sync import POSITIONS_HEADERS, ADD_LEG_TYPES, _position_row, _row_to_instrument
 from vol_calculator.xlwings_sync import (
-    xw_reset_dropdown_validations,
-    xw_write_future_spot_selector, xw_read_future_spot,
-    xw_write_interest_rate_cell, xw_read_interest_rate,
-    xw_write_positions_table, xw_read_positions_rows,
-    xw_write_add_leg_block, xw_read_add_leg_inputs, xw_clear_add_leg_inputs,
-    xw_read_live_quotes, xw_style_live_quotes_watchlist,
+    xw_write_data_block, xw_write_data_value, xw_read_data_value,
+    xw_read_manual_legs, xw_write_manual_legs,
+    xw_read_add_leg_inputs, xw_clear_add_leg_inputs,
+    xw_read_future_spot, xw_read_interest_rate,
+    xw_read_live_quotes,
     xw_write_greeks_sheet,
     xw_write_spot_vol_ladder_sheet, xw_write_heat_maps_sheet,
     xw_write_stress_sheet, xw_write_strike_sheet,
     xw_write_payoff_sheet, xw_write_breakevens_sheet,
 )
 
-WORKBOOK_PATH = "Position_Analysis.xlsm"
 # Anchored to this script's own folder, not the current working
 # directory -- RunPython launches Python with a cwd that doesn't match
 # this project folder, so a plain relative "Daily prop" silently finds
 # nothing when triggered from an Excel button (works fine when this
 # script is run directly from a terminal already cd'd here, which is
-# why this only shows up live).
+# why this only shows up live). The workbook path is absolute for the
+# same reason, and so a terminal run can't attach to a same-named copy
+# of the workbook open from somewhere else.
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+WORKBOOK_PATH = os.path.join(_PROJECT_DIR, "Position_Analysis.xlsm")
 DAILY_PROP_FOLDER = os.path.join(_PROJECT_DIR, "Daily prop")
 DEFAULT_INTEREST_RATE = 0.039
 
@@ -64,19 +63,19 @@ def _get_workbook():
         return xw.Book(WORKBOOK_PATH)
 
 
-def _manual_rows_from_sheet(home, extra_new_rows=None):
-    """
-    Reads whatever Manual rows are currently on the sheet and optionally
-    appends brand-new ones that don't exist there yet (used by add_leg()
-    to inject a just-added leg -- or every decomposed leg of a just-
-    added multi-leg structure -- before the full rebuild below sees
-    them). clear_portfolio() passes nothing and gets [].
-    """
+def _write_sofr(wb, sofr, error):
+    """The visible Interest Rate cell is a formula on SofrRate, so typing a manual rate over it simply replaces the formula. A failed fetch keeps the last known rate instead of blanking it."""
 
-    rows = [r for r in xw_read_positions_rows(home, start_row=13) if r.get("Source") == "Manual"]
-    if extra_new_rows:
-        rows.extend(extra_new_rows)
-    return rows
+    if sofr:
+        xw_write_data_value(wb, "SofrRate", sofr["rate"])
+        xw_write_data_value(wb, "SofrCaption", f"SOFR -- last updated {sofr['effective_date']} (click for source)")
+        xw_write_data_value(wb, "SofrUrl", sofr["source_url"])
+        return
+
+    if xw_read_data_value(wb, "SofrRate") is None:
+        xw_write_data_value(wb, "SofrRate", DEFAULT_INTEREST_RATE)
+    xw_write_data_value(wb, "SofrCaption", f"SOFR fetch failed -- showing last known rate. Error: {error}")
+    xw_write_data_value(wb, "SofrUrl", None)
 
 
 def _refresh(extra_new_rows=None, keep_manual=True):
@@ -102,15 +101,14 @@ def _refresh(extra_new_rows=None, keep_manual=True):
     home = wb.sheets["Home"]
 
     # The Home sheet's live CQGXL watchlist -- same block
-    # push_quotes_supabase.py reads to feed Streamlit. Daily Prop's own
-    # settlement price always wins for a contract it covers (pinned,
-    # same rule as Streamlit); this only fills in a price for a contract
-    # Daily Prop doesn't have today, e.g. a brand-new leg added by hand
-    # that isn't in the current book yet.
+    # push_quotes_supabase.py reads to feed Streamlit. A live quote wins
+    # over the Daily Prop settlement whenever there is one: the CSV can
+    # be days old, and every price derived from it (Underlying Price,
+    # Mark to Market, Greeks) would be stale with it. Daily Prop only
+    # covers contracts the watchlist doesn't quote.
     live_quotes = xw_read_live_quotes(home)
     live_prices = {q["contract"]: q["price"] for q in live_quotes}
-    for contract, price in live_prices.items():
-        prices.setdefault(contract, price)
+    prices.update(live_prices)
 
     # Defensive: a Daily Prop option whose underlying future doesn't
     # also appear in today's file (e.g. a thinly-listed month) and
@@ -120,18 +118,14 @@ def _refresh(extra_new_rows=None, keep_manual=True):
     imported = [(instrument, meta) for instrument, meta in imported if meta["contract"] in prices]
     contracts = contracts_from_imported(imported)
 
-    manual_rows = _manual_rows_from_sheet(home, extra_new_rows) if keep_manual else (
-        list(extra_new_rows) if extra_new_rows else []
-    )
+    manual_rows = xw_read_manual_legs(wb) if keep_manual else []
+    manual_rows += list(extra_new_rows or [])
     manual_instruments = [_row_to_instrument(row) for row in manual_rows]
 
     # Same defensive drop for Manual legs -- a leg added for a contract
     # that then turns out unpriceable (CSV doesn't cover it today, no
     # live quote either) can't be valued, so it can't stay in the book.
-    unpriced_manual = {
-        meta["contract"] for _, meta in manual_instruments
-        if meta["contract"] not in prices and meta.get("settlement_price") is None
-    }
+    unpriced_manual = {meta["contract"] for _, meta in manual_instruments if meta["contract"] not in prices}
     if unpriced_manual:
         manual_rows = [r for r in manual_rows if r["Contract"] not in unpriced_manual]
         manual_instruments = [
@@ -169,56 +163,60 @@ def _refresh(extra_new_rows=None, keep_manual=True):
         if contract not in add_leg_contracts:
             add_leg_contracts.append(contract)
 
-    xw_style_live_quotes_watchlist(home)
+    # Dropdown sources -- the visible dropdowns point at these names, so
+    # only the list contents change here, never the dropdowns themselves.
+    xw_write_data_block(wb, "ContractList", [[c] for c in add_leg_contracts])
+    xw_write_data_block(wb, "PortfolioContracts", [[c] for c in portfolio_contracts])
+    xw_write_data_block(wb, "LegTypes", [[t] for t in ADD_LEG_TYPES])
+    xw_write_data_block(wb, "OptionTypes", [["call"], ["put"]])
 
-    xw_reset_dropdown_validations(home)
-    xw_write_future_spot_selector(home, portfolio_contracts)
-    xw_write_add_leg_block(home, add_leg_contracts)
-    xw_write_interest_rate_cell(home, sofr=sofr, fallback_rate=DEFAULT_INTEREST_RATE, error=sofr_error)
-    interest_rate = xw_read_interest_rate(home, fallback_rate=DEFAULT_INTEREST_RATE)
+    _write_sofr(wb, sofr, sofr_error)
+    interest_rate = xw_read_interest_rate(wb, fallback_rate=DEFAULT_INTEREST_RATE)
 
     market = Market(futures_prices=prices, interest_rate=interest_rate)
-    for instrument, meta in manual_instruments:
-        # Only a Future's settlement_price is the underlying contract's
-        # own price -- an Option's is its own premium (Entry Price), a
-        # completely different number that must never overwrite the
-        # underlying's market price (that would corrupt every other leg
-        # priced off the same contract).
-        if isinstance(instrument, Future) and meta.get("settlement_price") is not None:
-            market.futures_prices[meta["contract"]] = meta["settlement_price"]
 
-    # A manually-added Future leg has no Underlying Price of its own
-    # (it isn't CSV-imported) -- backfill the Positions table's own
-    # column with whatever price the engine actually resolved for it
-    # (Daily Prop if it's covered, else the live CQGXL watchlist), so
-    # the row isn't left blank even though it's correctly priced.
-    for row, (instrument, meta) in zip(manual_rows, manual_instruments):
-        if isinstance(instrument, Future) and row.get("Underlying Price") is None:
-            row["Underlying Price"] = market.futures_prices.get(meta["contract"])
+    # What Add Leg's suggestions are built from (in the workbook's own
+    # VBA, so they fill instantly without a Python round-trip): each
+    # offered contract's current price, and its real CME option expiries.
+    xw_write_data_block(wb, "ContractQuotes", [
+        [c, commodity_from_contract(c), market.futures_prices.get(c)] for c in add_leg_contracts
+    ])
+    xw_write_data_block(wb, "ExpiryCandidates", [
+        [c, candidate["label"], candidate["days"]]
+        for c in add_leg_contracts for candidate in option_expiry_candidates(c)
+    ])
 
-    # "Mark to Market" and "Underlying Price" -- options only (a Future
-    # has neither, same as Streamlit); computed fresh every refresh for
-    # both Daily Prop and Manual legs. Daily Prop legs' meta dicts get
-    # annotated in place so _position_row (called inside
-    # xw_write_positions_table) picks them up the same way it already
-    # does for settlement_price.
+    # Underlying Price (every leg, Futures included) and Mark to Market
+    # (options only, same as Streamlit) are the engine's current price,
+    # recomputed every refresh. Daily Prop legs' meta dicts get annotated
+    # in place for _position_row; Manual legs get a display copy, while
+    # what's stored in ManualLegs stays exactly what was entered -- so a
+    # blank Entry Price keeps falling back to the *current* Mark to
+    # Market rather than freezing at the one from the day it was added.
     for instrument, meta in imported:
+        meta["underlying_price"] = compute_underlying_price(meta["contract"], market)
         if isinstance(instrument, AmericanOption):
             meta["model_price"] = compute_model_price(instrument, meta, market)
-            meta["underlying_price"] = compute_underlying_price(meta["contract"], market)
+
+    manual_display = []
     for row, (instrument, meta) in zip(manual_rows, manual_instruments):
+        shown = dict(row)
+        shown["Underlying Price"] = compute_underlying_price(meta["contract"], market)
         if isinstance(instrument, AmericanOption):
-            row["Mark to Market"] = compute_model_price(instrument, meta, market)
-            row["Underlying Price"] = compute_underlying_price(meta["contract"], market)
-            # No Entry Price typed in at Add Leg time -- fall back to
-            # this leg's own Mark to Market, same fallback the Positions
-            # table uses for any option with no recorded Entry Price.
-            if row.get("Entry Price") is None:
-                row["Entry Price"] = row["Mark to Market"]
+            shown["Mark to Market"] = compute_model_price(instrument, meta, market)
+            if shown.get("Entry Price") is None:
+                shown["Entry Price"] = shown["Mark to Market"]
+        manual_display.append(shown)
 
-    xw_write_positions_table(home, imported, extra_rows=manual_rows, start_row=13)
+    position_rows = [POSITIONS_HEADERS]
+    position_rows += [_position_row(instrument, meta, source="Daily Prop") for instrument, meta in imported]
+    position_rows += [[row.get(h) for h in POSITIONS_HEADERS] for row in manual_display]
+    xw_write_data_block(wb, "Positions", position_rows)
+    xw_write_manual_legs(
+        wb, [{**row, "Underlying Price": None, "Mark to Market": None} for row in manual_rows],
+    )
 
-    future_spot = xw_read_future_spot(home, portfolio_contracts)
+    future_spot = xw_read_future_spot(wb, portfolio_contracts)
     xw_write_greeks_sheet(wb.sheets["Greeks"], portfolio, market, portfolio_contracts)
     xw_write_spot_vol_ladder_sheet(wb.sheets["Spot&Vol Ladder"], portfolio, market, future_spot)
     xw_write_heat_maps_sheet(wb.sheets["Heat Maps"], portfolio, market, future_spot)
@@ -243,9 +241,8 @@ def add_leg():
     """Reads the Add Leg input block, validates it, appends it as new Manual row(s) (one for a plain leg, 2+ for a multi-leg structure's decomposed legs), clears the inputs, and runs a full refresh with it included."""
 
     wb = _get_workbook()
-    home = wb.sheets["Home"]
 
-    inputs = xw_read_add_leg_inputs(home)
+    inputs = xw_read_add_leg_inputs(wb)
 
     try:
         new_rows = build_manual_row(
@@ -253,7 +250,7 @@ def add_leg():
         )
     except ValueError as e:
         message = f"Add Leg failed: {e}"
-        home[ADD_LEG_STATUS_CELL].value = message
+        xw_write_data_value(wb, "AddLegStatus", message)
         wb.save()
         # A validation failure is easy to miss if it only lands in a
         # cell -- pop up a real dialog too, same as a VBA MsgBox would.
@@ -271,8 +268,7 @@ def add_leg():
     dedup_keys = ("Contract", "Type", "Quantity", "Strike", "Expiry (d)", "Vol (%)")
     already_added = any(
         all(row.get(k) == new_rows[0].get(k) for k in dedup_keys)
-        for row in xw_read_positions_rows(home, start_row=13)
-        if row.get("Source") == "Manual"
+        for row in xw_read_manual_legs(wb)
     )
 
     # Clear the inputs and write the success message only *after*
@@ -280,14 +276,14 @@ def add_leg():
     # the typed inputs are still there to retry instead of being
     # silently wiped with nothing saved.
     _refresh(extra_new_rows=None if already_added else new_rows)
-    xw_clear_add_leg_inputs(home)
+    xw_clear_add_leg_inputs(wb)
     verb = "Already added" if already_added else "Added"
     leg_type = inputs.get("type")
     if len(new_rows) == 1:
         summary = f"{new_rows[0]['Quantity']} {new_rows[0]['Contract']} ({new_rows[0]['Type']})"
     else:
         summary = f"{leg_type} ({len(new_rows)} legs) on {inputs.get('contract')}"
-    home[ADD_LEG_STATUS_CELL].value = f"{verb} {summary}"
+    xw_write_data_value(wb, "AddLegStatus", f"{verb} {summary}")
     wb.save()
 
 

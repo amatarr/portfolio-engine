@@ -600,17 +600,22 @@ def _position_row(instrument, meta, source):
     """
     Column routing matches the Streamlit Positions table exactly: a
     Future has no Entry Price or Mark to Market of its own -- its price
-    lives under Underlying Price instead. An Option's Entry Price falls
-    back to its Mark to Market when nothing was recorded for it (a
-    blank Daily Prop settlement, or a Manual leg added before an Entry
-    Price existed), rather than showing a blank cell.
+    lives under Underlying Price instead (the engine's current price
+    when the caller supplied one in meta["underlying_price"], else its
+    settlement). An Option's Entry Price falls back to its Mark to
+    Market when nothing was recorded for it (a blank Daily Prop
+    settlement, or a Manual leg added before an Entry Price existed),
+    rather than showing a blank cell.
     """
 
     if isinstance(instrument, Future):
+        underlying_price = meta.get("underlying_price")
+        if underlying_price is None:
+            underlying_price = meta.get("settlement_price")
         return [
             meta["contract"], meta["commodity"], "Future", instrument.quantity,
             None, None, meta.get("vol_pct"), None,
-            meta.get("settlement_price"), None, source,
+            underlying_price, None, source,
         ]
 
     if isinstance(instrument, AmericanOption):

@@ -1,42 +1,15 @@
 """
-xlwings equivalents of the openpyxl writers in excel_sync.py -- these
-write directly into a LIVE, already-open Excel workbook via COM, so
-changes appear instantly, no file lock, no "close Excel first."
+Live (xlwings/COM) access to the open Excel workbook -- changes appear
+instantly, no file lock, no "close Excel first."
 
-Same cell layout as excel_sync.py (imported from there, not duplicated),
-so existing charts/conditional formatting/data validation -- all built
-once via openpyxl -- keep referencing the right ranges; this module only
-ever touches values, never structure.
+The Home sheet is driven entirely through the hidden _Data sheet and
+named input cells (see below): Python only writes values there and reads
+inputs by name, never touching visible layout or formatting. The
+analytic sheets (Greeks, ladders, heat maps, ...) are still written
+directly by the xw_write_*_sheet functions further down.
 """
 
-from vol_calculator.excel_sync import (
-    FUTURE_SPOT_LABEL_CELL,
-    FUTURE_SPOT_VALUE_CELL,
-    _LIVE_QUOTES_BLOCKS, _LIVE_QUOTES_HEADER_ROW, _LIVE_QUOTES_DATA_ROWS,
-    INTEREST_RATE_LABEL_CELL,
-    INTEREST_RATE_VALUE_CELL,
-    SOFR_CAPTION_CELL,
-    POSITIONS_HEADERS,
-    ADD_LEG_LABEL_CELL,
-    ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL,
-    ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL,
-    ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL,
-    ADD_LEG_QUANTITY2_LABEL_CELL, ADD_LEG_QUANTITY2_VALUE_CELL,
-    ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL,
-    ADD_LEG_STRIKE2_LABEL_CELL, ADD_LEG_STRIKE2_VALUE_CELL,
-    ADD_LEG_STRIKE3_LABEL_CELL, ADD_LEG_STRIKE3_VALUE_CELL,
-    ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL,
-    ADD_LEG_EXPIRY2_LABEL_CELL, ADD_LEG_EXPIRY2_VALUE_CELL,
-    ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL,
-    ADD_LEG_VOL2_LABEL_CELL, ADD_LEG_VOL2_VALUE_CELL,
-    ADD_LEG_VOL3_LABEL_CELL, ADD_LEG_VOL3_VALUE_CELL,
-    ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL,
-    ADD_LEG_ENTRY_PRICE_LABEL_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL,
-    ADD_LEG_STATUS_CELL,
-    ADD_LEG_TYPES,
-    _position_row,
-    _round_greek,
-)
+from vol_calculator.excel_sync import POSITIONS_HEADERS, _round_greek
 from vol_calculator.greeks import GreekEngine
 from vol_calculator.cqg_quotes import _convert_cqg_symbol
 from vol_calculator.scenarios import (
@@ -49,8 +22,6 @@ from vol_calculator.scenarios import (
     breakevens_numerical,
     payoff_diagram,
 )
-
-_XL_VALIDATE_LIST = 3
 
 # (commodity, symbol_col, price_col) -- matches the Home sheet's own live
 # CQGXL watchlist layout (rows 3-8 under each commodity header). Same
@@ -89,373 +60,155 @@ def xw_read_live_quotes(sheet):
     return quotes
 
 
-_LIVE_QUOTES_HEADER_RGB = (191, 143, 0)
-
-
-def xw_style_live_quotes_watchlist(sheet):
-    """Live mirror of excel_sync.style_live_quotes_watchlist -- styling only, never touches the live RTD-linked price values themselves."""
-
-    for first_col, last_col in _LIVE_QUOTES_BLOCKS:
-        header = sheet.range((_LIVE_QUOTES_HEADER_ROW, first_col), (_LIVE_QUOTES_HEADER_ROW, last_col))
-        header.color = _LIVE_QUOTES_HEADER_RGB
-        header.api.Font.Color = 0xFFFFFF
-        header.api.Font.Bold = True
-
-        block = sheet.range((_LIVE_QUOTES_DATA_ROWS[0], first_col), (_LIVE_QUOTES_DATA_ROWS[1], last_col))
-        block.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
-
-        price_col = first_col + 1
-        sheet.range(
-            (_LIVE_QUOTES_DATA_ROWS[0], price_col), (_LIVE_QUOTES_DATA_ROWS[1], price_col)
-        ).number_format = "#,##0.00"
-
-
-def xw_reset_dropdown_validations(sheet):
-    """
-    Wipes every data-validation rule on the sheet. Repeated automated
-    Delete()+Add() cycles targeting just one cell, across many refreshes,
-    corrupt a sheet's internal validation state until every subsequent
-    Add() silently fails, even on an untouched cell -- so the reset has
-    to cover the whole sheet, and has to happen exactly once per refresh,
-    before any of this module's dropdown-writing functions run (they no
-    longer wipe individually).
-    """
-
-    try:
-        sheet.api.Cells.Validation.Delete()
-    except Exception:
-        pass
-
-
-def _add_list_validation(cell, items):
-    """
-    Best-effort: adds a list-type data validation dropdown to a cell.
-    AlertStyle/Operator have no real effect for a list-type validation,
-    but must be passed explicitly -- omitting them (relying on COM to
-    fill in VBA's optional-argument defaults) fails when called this way,
-    through raw COM dispatch rather than from inside VBA itself.
-
-    Wrapped in try/except: the sheet's validation state can get corrupted
-    by Excel/COM itself after enough Delete()+Add() cycles in one running
-    session (confirmed: even Add() on a brand-new, never-validated cell
-    starts failing once this happens) -- not something further automated
-    Delete()/Add() calls can repair; it clears on its own when the
-    workbook/Excel is closed and reopened. A dropdown failing to (re)build
-    is cosmetic -- it must never take down the rest of the refresh (Greeks,
-    Positions, ladders, etc. all still need to write), so this swallows
-    the error rather than raising.
-    """
-
-    try:
-        cell.api.Validation.Add(
-            Type=_XL_VALIDATE_LIST, AlertStyle=1, Operator=1, Formula1=",".join(items)
-        )
-    except Exception:
-        pass
-
-
-def xw_write_future_spot_selector(sheet, contracts):
-
-    sheet[FUTURE_SPOT_LABEL_CELL].value = "Future Spot:"
-
-    if not contracts:
-        return
-
-    value_cell = sheet[FUTURE_SPOT_VALUE_CELL]
-
-    if value_cell.value not in contracts:
-        value_cell.value = contracts[0]
-
-    # Caller must have already run xw_reset_dropdown_validations() once
-    # this refresh -- see that function's docstring for why.
-    _add_list_validation(value_cell, contracts)
-
-
-def xw_read_future_spot(sheet, contracts):
-
-    value = sheet[FUTURE_SPOT_VALUE_CELL].value
-    return value if value in contracts else (contracts[0] if contracts else None)
-
-
-def xw_write_interest_rate_cell(sheet, sofr=None, fallback_rate=0.039, error=None):
-
-    sheet[INTEREST_RATE_LABEL_CELL].value = "IR (%):"
-
-    if sofr:
-        sheet[INTEREST_RATE_VALUE_CELL].value = round(sofr["rate"] * 100, 2)
-    elif sheet[INTEREST_RATE_VALUE_CELL].value is None:
-        sheet[INTEREST_RATE_VALUE_CELL].value = round(fallback_rate * 100, 2)
-
-    if sofr:
-        caption = sheet[SOFR_CAPTION_CELL]
-        text = f"SOFR -- last updated {sofr['effective_date']} (click for source)"
-        # A cell can't hold two hyperlinks -- clear any existing one
-        # (from a previous refresh) before adding the current one.
-        if caption.api.Hyperlinks.Count:
-            caption.api.Hyperlinks.Delete()
-        sheet.api.Hyperlinks.Add(Anchor=caption.api, Address=sofr["source_url"], TextToDisplay=text)
-        caption.api.Font.Color = 0xC16305  # BGR for RGB(5,99,193)
-        caption.api.Font.Underline = 2  # xlUnderlineStyleSingle
-    elif error:
-        sheet[SOFR_CAPTION_CELL].value = f"SOFR fetch failed -- using manually entered rate. Error: {error}"
-    else:
-        sheet[SOFR_CAPTION_CELL].value = "SOFR unavailable -- using manually entered rate."
-
-
-def xw_read_interest_rate(sheet, fallback_rate=0.039):
-
-    value = sheet[INTEREST_RATE_VALUE_CELL].value
-    try:
-        return float(value) / 100
-    except (TypeError, ValueError):
-        return fallback_rate
-
-
-def xw_read_positions_rows(sheet, start_row=13, max_rows=500):
-    """Live-sheet equivalent of excel_sync.read_positions_rows -- reads the Positions table back as a list of {header: value} dicts."""
-
-    header_row = start_row + 1
-    n_cols = len(POSITIONS_HEADERS)
-
-    header_values = sheet.range((header_row, 1), (header_row, n_cols)).value
-    if header_values != POSITIONS_HEADERS:
-        return []
-
-    data_block = sheet.range((header_row + 1, 1), (header_row + max_rows, n_cols)).value
-
-    rows = []
-    for raw_row in data_block:
-        if not raw_row or raw_row[0] in (None, ""):
-            break
-        rows.append(dict(zip(POSITIONS_HEADERS, raw_row)))
-
-    return rows
-
-
-def xw_write_positions_table(sheet, imported, extra_rows=None, start_row=13, clear_rows=500):
-    """
-    Live-sheet equivalent of excel_sync.write_positions_table -- see that
-    function's docstring. extra_rows (already-built row dicts, e.g.
-    Manual-sourced legs read back via xw_read_positions_rows beforehand)
-    must be supplied by the caller: this clears the whole range first, so
-    it can't read "what to keep" off the sheet itself.
-    """
-
-    n_cols = len(POSITIONS_HEADERS)
-
-    clear_range = sheet.range((start_row, 1), (start_row + clear_rows, n_cols))
-    clear_range.value = [[None] * n_cols for _ in range(clear_rows + 1)]
-
-    sheet.range((start_row, 1)).value = "POSITIONS"
-
-    header_row = start_row + 1
-    sheet.range((header_row, 1)).value = POSITIONS_HEADERS
-
-    rows = [_position_row(instrument, meta, source="Daily Prop") for instrument, meta in (imported or [])]
-    rows += [[row.get(h) for h in POSITIONS_HEADERS] for row in (extra_rows or [])]
-
-    if rows:
-        sheet.range((header_row + 1, 1)).value = rows
-
-    _xw_style_positions_table(sheet, start_row, header_row, header_row + len(rows), n_cols)
-
-
-_POSITIONS_TITLE_RGB = (55, 86, 35)
-_POSITIONS_HEADER_RGB = (226, 239, 218)
-_POSITIONS_BAND_RGB = (247, 247, 247)
-_POSITIONS_NUMBER_FORMATS = {
-    4: "#,##0.##",
-    5: "#,##0.00",
-    6: "0",
-    7: "0.00",
-    8: "#,##0.00",
-    9: "#,##0.00",
-    10: "#,##0.00",
-}
-
-
-def _xw_style_positions_table(sheet, start_row, header_row, last_data_row, n_cols):
-    """Live mirror of excel_sync._style_positions_table -- row-level (not cell-level) fills/borders for fewer COM round-trips."""
-
-    title = sheet.range((start_row, 1), (start_row, n_cols))
-    title.api.Merge()
-    title.color = _POSITIONS_TITLE_RGB
-    title.api.Font.Color = 0xFFFFFF
-    title.api.Font.Bold = True
-    title.api.HorizontalAlignment = -4108  # xlCenter
-
-    header = sheet.range((header_row, 1), (header_row, n_cols))
-    header.color = _POSITIONS_HEADER_RGB
-    header.api.Font.Bold = True
-    header.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
-
-    for row in range(header_row + 1, last_data_row + 1):
-        row_range = sheet.range((row, 1), (row, n_cols))
-        row_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
-        if (row - header_row) % 2 == 0:
-            row_range.color = _POSITIONS_BAND_RGB
-        else:
-            row_range.color = None
-
-    for col, fmt in _POSITIONS_NUMBER_FORMATS.items():
-        if last_data_row >= header_row + 1:
-            sheet.range((header_row + 1, col), (last_data_row, col)).number_format = fmt
-
-    # A shrinking table would otherwise leave stale banding below the
-    # real data -- clear a reasonable buffer of leftover formatting too.
-    buffer_range = sheet.range((last_data_row + 1, 1), (last_data_row + 50, n_cols))
-    buffer_range.color = None
-    try:
-        buffer_range.api.Borders.LineStyle = -4142  # xlLineStyleNone
-    except Exception:
-        pass
-
-
-_ADD_LEG_HEADER_RGB = (31, 78, 120)
-_ADD_LEG_LABEL_RGB = (221, 235, 247)
-_ADD_LEG_INPUT_RGB = (255, 242, 204)
-_ADD_LEG_STATUS_RGB = (242, 242, 242)
 _XL_CONTINUOUS = 1
 _XL_THIN = 2
 
-_ADD_LEG_ROWS = [
-    (ADD_LEG_TYPE_LABEL_CELL, ADD_LEG_TYPE_VALUE_CELL),
-    (ADD_LEG_CONTRACT_LABEL_CELL, ADD_LEG_CONTRACT_VALUE_CELL),
-    (ADD_LEG_QUANTITY_LABEL_CELL, ADD_LEG_QUANTITY_VALUE_CELL),
-    (ADD_LEG_QUANTITY2_LABEL_CELL, ADD_LEG_QUANTITY2_VALUE_CELL),
-    (ADD_LEG_STRIKE_LABEL_CELL, ADD_LEG_STRIKE_VALUE_CELL),
-    (ADD_LEG_STRIKE2_LABEL_CELL, ADD_LEG_STRIKE2_VALUE_CELL),
-    (ADD_LEG_STRIKE3_LABEL_CELL, ADD_LEG_STRIKE3_VALUE_CELL),
-    (ADD_LEG_EXPIRY_LABEL_CELL, ADD_LEG_EXPIRY_VALUE_CELL),
-    (ADD_LEG_EXPIRY2_LABEL_CELL, ADD_LEG_EXPIRY2_VALUE_CELL),
-    (ADD_LEG_VOL_LABEL_CELL, ADD_LEG_VOL_VALUE_CELL),
-    (ADD_LEG_VOL2_LABEL_CELL, ADD_LEG_VOL2_VALUE_CELL),
-    (ADD_LEG_VOL3_LABEL_CELL, ADD_LEG_VOL3_VALUE_CELL),
-    (ADD_LEG_OPTION_TYPE_LABEL_CELL, ADD_LEG_OPTION_TYPE_VALUE_CELL),
-    (ADD_LEG_ENTRY_PRICE_LABEL_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL),
-]
+
+# --- Hidden _Data sheet ------------------------------------------------------
+#
+# Python writes plain values -- no styling, labels or layout -- to a
+# hidden "_Data" sheet, and keeps a workbook-level name sized to each
+# block's exact extent. The visible sheets reference those names with
+# ordinary formulas (e.g. =Positions spills the whole table), so the
+# layout and formatting of everything visible belongs to the workbook
+# itself and a refresh never overwrites it.
+
+DATA_SHEET = "_Data"
+
+# name -> (first column, width); every block starts at row 1. Columns
+# from AO onward are left to the workbook's own helper formulas (the
+# filtered dropdown lists for Add Leg) and are never written here.
+_DATA_BLOCKS = {
+    "Positions": ("A", len(POSITIONS_HEADERS)),
+    "ManualLegs": ("M", len(POSITIONS_HEADERS)),
+    "ContractList": ("Y", 1),
+    "PortfolioContracts": ("Z", 1),
+    "LegTypes": ("AA", 1),
+    "OptionTypes": ("AB", 1),
+    "ContractQuotes": ("AG", 3),    # contract, commodity, current price
+    "ExpiryCandidates": ("AK", 3),  # contract, label, days to expiry
+}
+_DATA_CLEAR_ROWS = 2000
+
+# name -> cell, for single values.
+_DATA_VALUES = {
+    "SofrRate": "AE1",
+    "SofrCaption": "AE2",
+    "SofrUrl": "AE3",
+    "AddLegStatus": "AE4",
+}
 
 
-def _xw_style_add_leg_block(sheet):
-    """Live mirror of excel_sync._style_add_leg_block -- same colors, via COM instead of openpyxl styles."""
+# Missing values are written as truly empty cells. A formula referencing
+# an empty cell shows 0, so visible formulas wrap the name to keep them
+# blank, e.g. =IF(Positions="","",Positions).
 
-    # K/L/M are now a deliberate empty gap between the Positions table
-    # and this block -- reset them back to a normal width in case an
-    # older refresh widened them when the block used to sit there.
-    sheet.range("J:J").column_width = 8.43
-    sheet.range("K:K").column_width = 8.43
-    sheet.range("L:L").column_width = 8.43
-    sheet.range("M:M").column_width = 8.43
-    sheet.range("N:N").column_width = 28
-    sheet.range("O:O").column_width = 16
+def xw_write_data_block(wb, name, rows):
 
-    header = sheet.range(f"{ADD_LEG_LABEL_CELL}:O13")
-    header.api.Merge()
-    header.color = _ADD_LEG_HEADER_RGB
-    header.api.Font.Color = 0xFFFFFF
-    header.api.Font.Bold = True
-    header.api.HorizontalAlignment = -4108  # xlCenter
-    header.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+    first_col, width = _DATA_BLOCKS[name]
+    top_left = wb.sheets[DATA_SHEET].range(f"{first_col}1")
+    top_left.resize(_DATA_CLEAR_ROWS, width).clear_contents()
 
-    for label_cell, value_cell in _ADD_LEG_ROWS:
-        label_range = sheet.range(label_cell)
-        label_range.color = _ADD_LEG_LABEL_RGB
-        label_range.api.Font.Bold = True
-        label_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+    if rows:
+        top_left.value = rows
 
-        value_range = sheet.range(value_cell)
-        value_range.color = _ADD_LEG_INPUT_RGB
-        value_range.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
-
-    status = sheet.range(f"{ADD_LEG_STATUS_CELL}:O28")
-    status.api.Merge()
-    status.color = _ADD_LEG_STATUS_RGB
-    status.api.Font.Italic = True
-    status.api.WrapText = True
-    status.api.BorderAround(LineStyle=_XL_CONTINUOUS, Weight=_XL_THIN)
+    block = top_left.resize(max(len(rows), 1), width)
+    wb.names.add(name, f"='{DATA_SHEET}'!{block.address}")
 
 
-def xw_write_add_leg_block(sheet, contracts):
-    """Add Leg input cells + dropdowns -- live mirror of excel_sync.write_add_leg_block. Caller must have run xw_reset_dropdown_validations() once this refresh first."""
+def xw_read_data_block(wb, name):
 
-    # Only the title (row 13) and status (row 28) cells are ever
-    # merged -- a merged cell left over from an earlier column position
-    # (this block has moved several times across this project's
-    # history) can overlap a newly-merged range and strand a written
-    # value in the OLD merge's anchor cell instead of the new one.
-    # Unmerging/clearing just those two rows across every column this
-    # block has ever occupied, before writing anything, guarantees a
-    # clean slate every refresh -- WITHOUT touching rows 14-27, which
-    # are plain (never-merged) input cells: wiping those too would
-    # destroy whatever the user just typed on every single refresh,
-    # including mid-way through an Add Leg submission that then hits a
-    # transient Excel/COM error, turning a retry into a confusing
-    # false validation failure instead of a clean retry.
-    for row in (13, 28):
-        row_range = sheet.range(f"J{row}:O{row}")
-        row_range.api.UnMerge()
-        row_range.value = [None] * 6
+    try:
+        block = wb.names[name].refers_to_range
+    except Exception:
+        return []
 
-    sheet[ADD_LEG_LABEL_CELL].value = "ADD LEG"
-    sheet[ADD_LEG_TYPE_LABEL_CELL].value = "Type:"
-    sheet[ADD_LEG_CONTRACT_LABEL_CELL].value = "Contract (underlying):"
-    sheet[ADD_LEG_QUANTITY_LABEL_CELL].value = "Quantity (Collar: Put Qty):"
-    sheet[ADD_LEG_QUANTITY2_LABEL_CELL].value = "Quantity 2 (Collar: Call Qty):"
-    sheet[ADD_LEG_STRIKE_LABEL_CELL].value = "Strike 1 (k1/k_long/k_put):"
-    sheet[ADD_LEG_STRIKE2_LABEL_CELL].value = "Strike 2 (k2/k_short/k_call):"
-    sheet[ADD_LEG_STRIKE3_LABEL_CELL].value = "Strike 3 (Butterfly k3 only):"
-    sheet[ADD_LEG_EXPIRY_LABEL_CELL].value = "Expiry d (blank=auto; Calendar: near):"
-    sheet[ADD_LEG_EXPIRY2_LABEL_CELL].value = "Expiry d 2 (Calendar Spread far only):"
-    sheet[ADD_LEG_VOL_LABEL_CELL].value = "Vol % 1 (vol/vol_long/vol_call/vol_put/vol1/vol_near):"
-    sheet[ADD_LEG_VOL2_LABEL_CELL].value = "Vol % 2 (vol_short/vol_put/vol_call/vol2/vol_far):"
-    sheet[ADD_LEG_VOL3_LABEL_CELL].value = "Vol % 3 (Butterfly vol3 only):"
-    sheet[ADD_LEG_OPTION_TYPE_LABEL_CELL].value = "Option Type (Butterfly/Calendar Spread only):"
-    sheet[ADD_LEG_ENTRY_PRICE_LABEL_CELL].value = "Entry Price (blank = Mark to Mkt; single Call/Put only):"
-
-    type_cell = sheet[ADD_LEG_TYPE_VALUE_CELL]
-    if type_cell.value not in ADD_LEG_TYPES:
-        type_cell.value = ADD_LEG_TYPES[0]
-    _add_list_validation(type_cell, ADD_LEG_TYPES)
-
-    _add_list_validation(sheet[ADD_LEG_OPTION_TYPE_VALUE_CELL], ["call", "put"])
-
-    if contracts:
-        contract_cell = sheet[ADD_LEG_CONTRACT_VALUE_CELL]
-        if contract_cell.value not in contracts:
-            contract_cell.value = contracts[0]
-        _add_list_validation(contract_cell, contracts)
-
-    _xw_style_add_leg_block(sheet)
+    return block.options(ndim=2).value
 
 
-def xw_read_add_leg_inputs(sheet):
-    return {
-        "type": sheet[ADD_LEG_TYPE_VALUE_CELL].value,
-        "contract": sheet[ADD_LEG_CONTRACT_VALUE_CELL].value,
-        "quantity": sheet[ADD_LEG_QUANTITY_VALUE_CELL].value,
-        "quantity2": sheet[ADD_LEG_QUANTITY2_VALUE_CELL].value,
-        "strike": sheet[ADD_LEG_STRIKE_VALUE_CELL].value,
-        "strike2": sheet[ADD_LEG_STRIKE2_VALUE_CELL].value,
-        "strike3": sheet[ADD_LEG_STRIKE3_VALUE_CELL].value,
-        "expiry_days": sheet[ADD_LEG_EXPIRY_VALUE_CELL].value,
-        "expiry_days2": sheet[ADD_LEG_EXPIRY2_VALUE_CELL].value,
-        "vol_pct": sheet[ADD_LEG_VOL_VALUE_CELL].value,
-        "vol_pct2": sheet[ADD_LEG_VOL2_VALUE_CELL].value,
-        "vol_pct3": sheet[ADD_LEG_VOL3_VALUE_CELL].value,
-        "option_type": sheet[ADD_LEG_OPTION_TYPE_VALUE_CELL].value,
-        "entry_price": sheet[ADD_LEG_ENTRY_PRICE_VALUE_CELL].value,
-    }
+def xw_write_data_value(wb, name, value):
+
+    cell = wb.sheets[DATA_SHEET].range(_DATA_VALUES[name])
+    cell.value = value
+    wb.names.add(name, f"='{DATA_SHEET}'!{cell.address}")
 
 
-def xw_clear_add_leg_inputs(sheet):
-    for cell in (
-        ADD_LEG_QUANTITY_VALUE_CELL, ADD_LEG_QUANTITY2_VALUE_CELL,
-        ADD_LEG_STRIKE_VALUE_CELL, ADD_LEG_STRIKE2_VALUE_CELL, ADD_LEG_STRIKE3_VALUE_CELL,
-        ADD_LEG_EXPIRY_VALUE_CELL, ADD_LEG_EXPIRY2_VALUE_CELL,
-        ADD_LEG_VOL_VALUE_CELL, ADD_LEG_VOL2_VALUE_CELL, ADD_LEG_VOL3_VALUE_CELL,
-        ADD_LEG_OPTION_TYPE_VALUE_CELL, ADD_LEG_ENTRY_PRICE_VALUE_CELL,
-    ):
-        sheet[cell].value = None
+def xw_read_data_value(wb, name):
+
+    return wb.sheets[DATA_SHEET].range(_DATA_VALUES[name]).value
+
+
+def xw_write_manual_legs(wb, rows):
+
+    xw_write_data_block(
+        wb, "ManualLegs",
+        [POSITIONS_HEADERS] + [[row.get(h) for h in POSITIONS_HEADERS] for row in rows],
+    )
+
+
+def xw_read_manual_legs(wb):
+    """Manual legs are stored on _Data, not read back off the visible Positions table -- that table can be rearranged freely without losing them."""
+
+    block = xw_read_data_block(wb, "ManualLegs")
+    if not block or block[0] != POSITIONS_HEADERS:
+        return []
+    return [dict(zip(POSITIONS_HEADERS, row)) for row in block[1:] if row[0] is not None]
+
+
+# --- Named input cells ---------------------------------------------------------
+#
+# Every input is found by workbook name, never by cell address, so the
+# input cells can be moved anywhere in the workbook without touching code.
+
+FUTURE_SPOT_NAME = "FutureSpot"
+INTEREST_RATE_NAME = "InterestRate"
+
+ADD_LEG_INPUT_NAMES = {
+    "type": "AddLeg_Type",
+    "contract": "AddLeg_Contract",
+    "quantity": "AddLeg_Quantity",
+    "quantity2": "AddLeg_Quantity2",
+    "strike": "AddLeg_Strike1",
+    "strike2": "AddLeg_Strike2",
+    "strike3": "AddLeg_Strike3",
+    "expiry_days": "AddLeg_Expiry",
+    "expiry_days2": "AddLeg_Expiry2",
+    "vol_pct": "AddLeg_Vol1",
+    "vol_pct2": "AddLeg_Vol2",
+    "vol_pct3": "AddLeg_Vol3",
+    "option_type": "AddLeg_OptionType",
+    "entry_price": "AddLeg_EntryPrice",
+}
+
+
+def xw_read_named(wb, name):
+    return wb.names[name].refers_to_range.value
+
+
+def xw_read_add_leg_inputs(wb):
+    return {key: xw_read_named(wb, name) for key, name in ADD_LEG_INPUT_NAMES.items()}
+
+
+def xw_clear_add_leg_inputs(wb):
+    """Type and Contract are kept -- only the per-leg numbers are cleared after a successful add."""
+
+    for key, name in ADD_LEG_INPUT_NAMES.items():
+        if key not in ("type", "contract"):
+            wb.names[name].refers_to_range.value = None
+
+
+def xw_read_future_spot(wb, contracts):
+
+    value = xw_read_named(wb, FUTURE_SPOT_NAME)
+    return value if value in contracts else (contracts[0] if contracts else None)
+
+
+def xw_read_interest_rate(wb, fallback_rate=0.039):
+
+    try:
+        return float(xw_read_named(wb, INTEREST_RATE_NAME)) / 100
+    except (TypeError, ValueError):
+        return fallback_rate
 
 
 _TABLE_LABEL_RGB = (46, 117, 182)
