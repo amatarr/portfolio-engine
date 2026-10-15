@@ -4,27 +4,30 @@ Position_Analysis.xlsm is already open, this attaches to that running
 instance (no file lock issue, changes appear instantly); otherwise it
 opens it fresh.
 
-Home-sheet results go to the hidden _Data sheet as plain values, and
-inputs are read from named cells -- see vol_calculator/xlwings_sync.py.
-Nothing visible on Home is written or restyled by a refresh.
+Every leg lives in one stored book on the hidden _Data sheet. Legs get
+there by Import Daily Prop or Add Leg, and leave by Remove selected legs
+or Clear Portfolio; a refresh only prices what's in the book. Results go
+to _Data as plain values and inputs are read from named cells -- see
+vol_calculator/xlwings_sync.py. Nothing visible on Home is written or
+restyled by a refresh.
 """
 
 import os
+from datetime import date, datetime, timedelta
 
 import xlwings as xw
 
 from vol_calculator import (
-    Market, Portfolio, latest_daily_prop_file, import_bushel_positions,
-    fetch_latest_sofr, contracts_from_imported, prices_from_imported,
-    commodity_from_contract, approx_option_expiry_days,
+    Market, Portfolio, import_bushel_positions, daily_prop_as_of_date,
+    fetch_latest_sofr, commodity_from_contract, approx_option_expiry_days,
     build_manual_row, compute_model_price, compute_underlying_price,
     option_expiry_candidates,
 )
-from vol_calculator.instruments import AmericanOption
+from vol_calculator.instruments import AmericanOption, Future
 from vol_calculator.excel_sync import POSITIONS_HEADERS, ADD_LEG_TYPES, _position_row, _row_to_instrument
 from vol_calculator.xlwings_sync import (
-    xw_write_data_block, xw_read_data_block, xw_write_data_value, xw_read_data_value,
-    xw_read_manual_legs, xw_write_manual_legs,
+    xw_write_data_block, xw_write_data_value, xw_read_data_value,
+    xw_read_book, xw_write_book,
     xw_read_add_leg_inputs, xw_clear_add_leg_inputs,
     xw_read_future_spot, xw_read_interest_rate,
     xw_read_live_quotes,
@@ -34,18 +37,13 @@ from vol_calculator.xlwings_sync import (
     xw_write_payoff_sheet, xw_write_breakevens_sheet,
 )
 
-# Anchored to this script's own folder, not the current working
-# directory -- RunPython launches Python with a cwd that doesn't match
-# this project folder, so a plain relative "Daily prop" silently finds
-# nothing when triggered from an Excel button (works fine when this
-# script is run directly from a terminal already cd'd here, which is
-# why this only shows up live). The workbook path is absolute for the
-# same reason, and so a terminal run can't attach to a same-named copy
-# of the workbook open from somewhere else.
+# Absolute, anchored to this script's own folder: RunPython launches
+# Python with an unrelated working directory, and a terminal run must not
+# attach to a same-named copy of the workbook open from somewhere else.
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKBOOK_PATH = os.path.join(_PROJECT_DIR, "Position_Analysis.xlsm")
-DAILY_PROP_FOLDER = os.path.join(_PROJECT_DIR, "Daily prop")
 DEFAULT_INTEREST_RATE = 0.039
+ANALYTIC_SHEETS = ["Greeks", "Spot&Vol Ladder", "Heat Maps", "Stress", "Strike", "Payoff", "Breakevens"]
 
 
 def _get_workbook():
@@ -78,74 +76,69 @@ def _write_sofr(wb, sofr, error):
     xw_write_data_value(wb, "SofrUrl", None)
 
 
-def _refresh(extra_new_rows=None, keep_manual=True):
+def _as_date(value):
+    return value.date() if isinstance(value, datetime) else value
+
+
+def _unique(items):
+    return list(dict.fromkeys(items))
+
+
+def _with_expiry_date(row, as_of):
+    """Records an option's actual expiry date alongside its days-to-expiry, so the countdown stays right on every later day the leg is still in the book."""
+
+    days = row.get("Expiry (d)")
+    expiry_date = as_of + timedelta(days=int(days)) if row["Type"] in ("Call", "Put") and days else None
+    return {**row, "Settlement": row.get("Settlement"), "Expiry Date": expiry_date}
+
+
+def _imported_row(instrument, meta, as_of):
     """
-    Shared body behind main()/add_leg()/clear_portfolio(). extra_new_rows
-    (a list of Manual row dicts, Source="Manual" -- one row for a plain
-    Future/Call/Put, 2+ for a multi-leg structure's decomposed legs) is
-    folded in alongside whatever Manual rows already exist, before the
-    Positions table and Portfolio are rebuilt -- so a just-added leg is
-    priced in the same pass that writes it. keep_manual=False
-    (clear_portfolio) drops every existing Manual row instead of
-    preserving them.
+    A book row for one leg of a Daily Prop file. A future's settlement is
+    kept as the price fallback for its contract (an option's settlement is
+    its own premium -- its Entry Price -- never a futures price).
     """
 
-    path = latest_daily_prop_file(DAILY_PROP_FOLDER)
-    if path is None:
-        raise SystemExit(f"No Daily_Prop_Bod_Detail_*.csv found in {DAILY_PROP_FOLDER!r}")
+    row = dict(zip(POSITIONS_HEADERS, _position_row(instrument, meta, source="Daily Prop")))
+    row["Underlying Price"] = None
+    row["Mark to Market"] = None
+    if isinstance(instrument, Future):
+        row["Settlement"] = meta.get("settlement_price")
+    return _with_expiry_date(row, as_of)
 
-    imported = import_bushel_positions(path)
-    prices = prices_from_imported(imported)
+
+def _refresh():
+    """Prices every leg in the book and rewrites the Positions table, dropdown lists and analytic sheets."""
 
     wb = _get_workbook()
-    home = wb.sheets["Home"]
+    today = date.today()
 
-    # The Home sheet's live CQGXL watchlist -- same block
-    # push_quotes_supabase.py reads to feed Streamlit. A live quote wins
-    # over the Daily Prop settlement whenever there is one: the CSV can
-    # be days old, and every price derived from it (Underlying Price,
-    # Mark to Market, Greeks) would be stale with it. Daily Prop only
-    # covers contracts the watchlist doesn't quote.
-    live_quotes = xw_read_live_quotes(home)
-    live_prices = {q["contract"]: q["price"] for q in live_quotes}
+    book = xw_read_book(wb)
+    for row in book:
+        if row.get("Expiry Date"):
+            row["Expiry (d)"] = max((_as_date(row["Expiry Date"]) - today).days, 1)
+
+    # A live CQGXL quote always wins over a Daily Prop settlement -- the
+    # file can be days old, and every price derived from it (Underlying
+    # Price, Mark to Market, Greeks) would be stale with it. Settlements
+    # only cover contracts the watchlist doesn't quote.
+    prices = {row["Contract"]: row["Settlement"] for row in book if row.get("Settlement") is not None}
+    live_prices = {q["contract"]: q["price"] for q in xw_read_live_quotes(wb)}
     prices.update(live_prices)
 
-    # Defensive: a Daily Prop option whose underlying future doesn't
-    # also appear in today's file (e.g. a thinly-listed month) and
-    # isn't live-quoted either has no price anywhere -- same class of
-    # bug that crashed Streamlit's Greeks on an unpriced leg. Drop it
-    # here rather than let it take down this whole refresh.
-    imported = [(instrument, meta) for instrument, meta in imported if meta["contract"] in prices]
-    contracts = contracts_from_imported(imported)
-
-    manual_rows = xw_read_manual_legs(wb) if keep_manual else []
-    manual_rows += list(extra_new_rows or [])
-    manual_instruments = [_row_to_instrument(row) for row in manual_rows]
-
-    # Same defensive drop for Manual legs -- a leg added for a contract
-    # that then turns out unpriceable (CSV doesn't cover it today, no
-    # live quote either) can't be valued, so it can't stay in the book.
-    unpriced_manual = {meta["contract"] for _, meta in manual_instruments if meta["contract"] not in prices}
-    if unpriced_manual:
-        manual_rows = [r for r in manual_rows if r["Contract"] not in unpriced_manual]
-        manual_instruments = [
-            (i, m) for i, m in manual_instruments if m["contract"] not in unpriced_manual
-        ]
+    # A leg on a contract with no price anywhere stays in the book, but
+    # can't be valued -- it's shown without prices and left out of the
+    # portfolio rather than taking down the whole refresh.
+    legs = [(row, *_row_to_instrument(row)) for row in book]
+    priced = [(row, instrument, meta) for row, instrument, meta in legs if meta["contract"] in prices]
+    unpriced = _unique(row["Contract"] for row, _, meta in legs if meta["contract"] not in prices)
 
     portfolio = Portfolio()
-    for instrument, _ in imported:
-        portfolio.add(instrument)
-    for instrument, _ in manual_instruments:
+    for _, instrument, _ in priced:
         portfolio.add(instrument)
 
-    # Every analytic sheet (Greeks, ladders, heat maps, stress...) breaks
-    # its numbers down per contract -- a manually-added leg's contract
-    # has to be in this list too, or its own row just never shows up even
-    # though it's correctly priced and counted in portfolio-wide totals.
-    portfolio_contracts = list(contracts)
-    for _, meta in manual_instruments:
-        if meta["contract"] not in portfolio_contracts:
-            portfolio_contracts.append(meta["contract"])
+    portfolio_contracts = _unique(meta["contract"] for _, _, meta in priced)
+    add_leg_contracts = _unique([row["Contract"] for row in book] + list(live_prices))
 
     sofr = None
     sofr_error = None
@@ -153,15 +146,6 @@ def _refresh(extra_new_rows=None, keep_manual=True):
         sofr = fetch_latest_sofr()
     except Exception as e:
         sofr_error = f"{type(e).__name__}: {e}"
-
-    # Add Leg's Contract dropdown should offer every live-quoted
-    # contract too, not just today's Daily Prop book -- otherwise there
-    # was never a way to add a leg for a contract Daily Prop doesn't
-    # happen to carry today.
-    add_leg_contracts = list(contracts)
-    for contract in live_prices:
-        if contract not in add_leg_contracts:
-            add_leg_contracts.append(contract)
 
     # Dropdown sources -- the visible dropdowns point at these names, so
     # only the list contents change here, never the dropdowns themselves.
@@ -186,50 +170,48 @@ def _refresh(extra_new_rows=None, keep_manual=True):
         for c in add_leg_contracts for candidate in option_expiry_candidates(c)
     ])
 
-    # Underlying Price (every leg, Futures included) and Mark to Market
-    # (options only, same as Streamlit) are the engine's current price,
-    # recomputed every refresh. Daily Prop legs' meta dicts get annotated
-    # in place for _position_row; Manual legs get a display copy, while
-    # what's stored in ManualLegs stays exactly what was entered -- so a
-    # blank Entry Price keeps falling back to the *current* Mark to
-    # Market rather than freezing at the one from the day it was added.
-    for instrument, meta in imported:
-        meta["underlying_price"] = compute_underlying_price(meta["contract"], market)
-        if isinstance(instrument, AmericanOption):
-            meta["model_price"] = compute_model_price(instrument, meta, market)
-
-    manual_display = []
-    for row, (instrument, meta) in zip(manual_rows, manual_instruments):
-        shown = dict(row)
-        shown["Underlying Price"] = compute_underlying_price(meta["contract"], market)
-        if isinstance(instrument, AmericanOption):
-            shown["Mark to Market"] = compute_model_price(instrument, meta, market)
-            if shown.get("Entry Price") is None:
-                shown["Entry Price"] = shown["Mark to Market"]
-        manual_display.append(shown)
-
+    # One displayed row per book row, in book order (Remove selected legs
+    # relies on that). Underlying Price and Mark to Market (options only,
+    # same as Streamlit) are the engine's current price; a blank Entry
+    # Price shows the *current* Mark to Market, never a frozen one.
     position_rows = [POSITIONS_HEADERS]
-    position_rows += [_position_row(instrument, meta, source="Daily Prop") for instrument, meta in imported]
-    position_rows += [[row.get(h) for h in POSITIONS_HEADERS] for row in manual_display]
+    for row, instrument, meta in legs:
+        shown = {h: row.get(h) for h in POSITIONS_HEADERS}
+        if meta["contract"] in prices:
+            shown["Underlying Price"] = compute_underlying_price(meta["contract"], market)
+            if isinstance(instrument, AmericanOption):
+                shown["Mark to Market"] = compute_model_price(instrument, meta, market)
+                if shown["Entry Price"] is None:
+                    shown["Entry Price"] = shown["Mark to Market"]
+        position_rows.append([shown[h] for h in POSITIONS_HEADERS])
     xw_write_data_block(wb, "Positions", position_rows)
-    xw_write_manual_legs(
-        wb, [{**row, "Underlying Price": None, "Mark to Market": None} for row in manual_rows],
-    )
+
+    if unpriced:
+        xw_write_data_value(
+            wb, "AddLegStatus",
+            f"Not priced (no live quote or Daily Prop settlement): {', '.join(unpriced)}",
+        )
 
     future_spot = xw_read_future_spot(wb, portfolio_contracts)
-    xw_write_greeks_sheet(wb.sheets["Greeks"], portfolio, market, portfolio_contracts)
-    xw_write_spot_vol_ladder_sheet(wb.sheets["Spot&Vol Ladder"], portfolio, market, future_spot)
-    xw_write_heat_maps_sheet(wb.sheets["Heat Maps"], portfolio, market, future_spot)
-    xw_write_stress_sheet(wb.sheets["Stress"], portfolio, market, future_spot)
-    xw_write_strike_sheet(wb.sheets["Strike"], portfolio, market)
-    xw_write_payoff_sheet(wb.sheets["Payoff"], portfolio, market, future_spot)
-    xw_write_breakevens_sheet(wb.sheets["Breakevens"], portfolio, market, future_spot)
+    if portfolio_contracts:
+        xw_write_greeks_sheet(wb.sheets["Greeks"], portfolio, market, portfolio_contracts)
+        xw_write_spot_vol_ladder_sheet(wb.sheets["Spot&Vol Ladder"], portfolio, market, future_spot)
+        xw_write_heat_maps_sheet(wb.sheets["Heat Maps"], portfolio, market, future_spot)
+        xw_write_stress_sheet(wb.sheets["Stress"], portfolio, market, future_spot)
+        xw_write_strike_sheet(wb.sheets["Strike"], portfolio, market)
+        xw_write_payoff_sheet(wb.sheets["Payoff"], portfolio, market, future_spot)
+        xw_write_breakevens_sheet(wb.sheets["Breakevens"], portfolio, market, future_spot)
+    else:
+        # Nothing priced to analyse (empty book) -- clear the previous
+        # book's results rather than leave them looking current.
+        for name in ANALYTIC_SHEETS:
+            wb.sheets[name].used_range.clear_contents()
 
     wb.save()
 
     print(
-        f"Refreshed (live) from {path} -- {len(imported)} Daily Prop legs + {len(manual_rows)} Manual legs, "
-        f"{len(portfolio_contracts)} contracts, Future Spot={future_spot}, Interest Rate={interest_rate * 100:.2f}%"
+        f"Refreshed (live) -- {len(book)} legs ({len(priced)} priced), {len(portfolio_contracts)} contracts, "
+        f"Future Spot={future_spot}, Interest Rate={interest_rate * 100:.2f}%"
     )
 
 
@@ -237,8 +219,26 @@ def main():
     _refresh()
 
 
+def import_daily_prop(path):
+    """
+    Adds every leg of a Daily Prop file (picked by the ImportDailyProp
+    macro) to the book, on top of whatever is already there. Days to
+    expiry are measured from the file's own date, which is in its name.
+    """
+
+    wb = _get_workbook()
+    as_of = daily_prop_as_of_date(path) or date.today()
+    imported = import_bushel_positions(path, as_of=as_of)
+
+    xw_write_book(wb, xw_read_book(wb) + [_imported_row(i, m, as_of) for i, m in imported])
+    _refresh()
+
+    xw_write_data_value(wb, "AddLegStatus", f"Imported {len(imported)} leg(s) from {os.path.basename(path)}")
+    wb.save()
+
+
 def add_leg():
-    """Reads the Add Leg input block, validates it, appends it as new Manual row(s) (one for a plain leg, 2+ for a multi-leg structure's decomposed legs), clears the inputs, and runs a full refresh with it included."""
+    """Reads the Add Leg input block, validates it, adds it to the book (one row for a plain leg, 2+ for a multi-leg structure's decomposed legs), clears the inputs, and refreshes."""
 
     wb = _get_workbook()
 
@@ -258,69 +258,54 @@ def add_leg():
         ctypes.windll.user32.MessageBoxW(0, message, "Add Leg", 0x30)
         return
 
-    # If a previous attempt already wrote these exact rows (its own
-    # _refresh() crashed partway through -- e.g. a transient Excel/COM
-    # hiccup -- before reaching the clear-inputs step below, so the
-    # inputs never got wiped and this is really a retry of the same
-    # click), don't append a second copy. Checking just the first leg
-    # is enough -- a retry resubmits identical inputs, so the first leg
-    # it builds is identical too.
-    dedup_keys = ("Contract", "Type", "Quantity", "Strike", "Expiry (d)", "Vol (%)")
-    already_added = any(
-        all(row.get(k) == new_rows[0].get(k) for k in dedup_keys)
-        for row in xw_read_manual_legs(wb)
-    )
+    new_rows = [_with_expiry_date(row, date.today()) for row in new_rows]
+    book = xw_read_book(wb)
 
-    # Clear the inputs and write the success message only *after*
-    # _refresh() actually completes -- if it raises partway through,
-    # the typed inputs are still there to retry instead of being
-    # silently wiped with nothing saved.
-    _refresh(extra_new_rows=None if already_added else new_rows)
+    # The book is saved before refreshing, so if a refresh crashes partway
+    # (a transient Excel/COM hiccup) and the click is retried with the
+    # same inputs, the legs are already there -- don't add a second copy.
+    # Checking the first leg is enough: a retry rebuilds identical legs.
+    dedup_keys = ("Contract", "Type", "Quantity", "Strike", "Expiry (d)", "Vol (%)")
+    already_added = any(all(row.get(k) == new_rows[0].get(k) for k in dedup_keys) for row in book)
+    if not already_added:
+        xw_write_book(wb, book + new_rows)
+
+    # Clear the inputs and write the success message only *after* the
+    # refresh completes -- if it raises partway through, the typed inputs
+    # are still there to retry instead of being silently wiped.
+    _refresh()
     xw_clear_add_leg_inputs(wb)
     verb = "Already added" if already_added else "Added"
-    leg_type = inputs.get("type")
     if len(new_rows) == 1:
         summary = f"{new_rows[0]['Quantity']} {new_rows[0]['Contract']} ({new_rows[0]['Type']})"
     else:
-        summary = f"{leg_type} ({len(new_rows)} legs) on {inputs.get('contract')}"
+        summary = f"{inputs.get('type')} ({len(new_rows)} legs) on {inputs.get('contract')}"
     xw_write_data_value(wb, "AddLegStatus", f"{verb} {summary}")
     wb.save()
 
 
 def remove_legs(rows):
-    """
-    Removes the Manual legs shown at the given Positions-table rows (a
-    comma-separated string; 1 = the first leg under the header), as
-    picked by the RemoveSelectedLegs macro. Daily Prop legs are left in
-    place: they come back from the Daily Prop file on every refresh.
-    """
+    """Removes the legs shown at the given Positions-table rows (a comma-separated string; 1 = the first leg under the header), as picked by the RemoveSelectedLegs macro."""
 
     wb = _get_workbook()
-    picked = sorted({int(r) for r in rows.split(",") if r.strip()})
+    picked = {int(r) for r in rows.split(",") if r.strip()}
 
-    # Positions lists every Daily Prop leg first, then the Manual legs in
-    # the same order they're stored in ManualLegs.
-    shown = xw_read_data_block(wb, "Positions")[1:]
-    n_daily = sum(1 for row in shown if row[-1] != "Manual")
-    in_table = [i for i in picked if 1 <= i <= len(shown)]
-    drop = {i - 1 - n_daily for i in in_table if shown[i - 1][-1] == "Manual"}
-    skipped = len(in_table) - len(drop)
-
-    manual = xw_read_manual_legs(wb)
-    xw_write_manual_legs(wb, [leg for k, leg in enumerate(manual) if k not in drop])
+    # The Positions table shows exactly one row per book row, in order.
+    book = xw_read_book(wb)
+    kept = [row for i, row in enumerate(book, start=1) if i not in picked]
+    xw_write_book(wb, kept)
     _refresh()
 
-    message = f"Removed {len(drop)} leg(s)."
-    if skipped:
-        message += f" {skipped} Daily Prop leg(s) kept -- they come from the Daily Prop file."
-    xw_write_data_value(wb, "AddLegStatus", message)
+    xw_write_data_value(wb, "AddLegStatus", f"Removed {len(book) - len(kept)} leg(s).")
     wb.save()
 
 
 def clear_portfolio():
-    """Drops every Manual leg (Daily Prop legs come back on the next refresh regardless) and runs a full refresh."""
+    """Empties the whole book -- imported and manually added legs alike -- and refreshes."""
 
-    _refresh(keep_manual=False)
+    wb = _get_workbook()
+    xw_write_book(wb, [])
+    _refresh()
 
 
 if __name__ == "__main__":

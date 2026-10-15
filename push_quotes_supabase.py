@@ -27,10 +27,10 @@ def _load_secrets():
 
 
 def read_live_quotes():
-    """Thin wrapper over the shared Home-sheet watchlist reader -- xlwings_refresh.py uses the same one to price legs outside today's Daily Prop file."""
+    """Thin wrapper over the shared watchlist reader -- xlwings_refresh.py prices the book from the same quotes."""
 
     wb = xw.Book(WORKBOOK_PATH)
-    return xw_read_live_quotes(wb.sheets["Home"])
+    return xw_read_live_quotes(wb)
 
 
 def push_once(client, quotes):

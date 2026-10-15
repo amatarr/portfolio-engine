@@ -11,7 +11,7 @@ collects everything; Python does the maths when you press a button.
 | `Position_Analysis.xlsm` | The workbook. Open it from **this** folder, since the buttons look for the Python files next to it. |
 | `xlwings_refresh.py` | What the buttons run: reads the book, prices it, writes the results into the workbook. |
 | `vol_calculator/` | The pricing engine: instruments, Black-76 pricing, Greeks, scenarios, Daily Prop import, CME expiry calendar. |
-| `vba/` | Readable copies of the macros inside the workbook: `AddLegUI.bas` (Add Leg autofill) and `PositionsUI.bas` (Remove selected legs). |
+| `vba/` | Readable copies of the macros inside the workbook: `AddLegUI.bas` (Add Leg autofill) and `PositionsUI.bas` (Import Daily Prop, Remove selected legs). |
 | `Daily prop/` | Put the Daily Prop file here (see below). |
 | `requirements.txt` | Python packages to install. |
 
@@ -40,9 +40,13 @@ collects everything; Python does the maths when you press a button.
 
 ## Daily use
 
-- **Daily Prop file:** drop `Daily_Prop_Bod_Detail_YYYY_MM_DD.csv` into
-  `Daily prop/`. The newest one (by the date in its name) is used. With no
-  file there, a refresh stops with "No Daily_Prop_Bod_Detail_*.csv found".
+- **The book** is one stored list of legs, imported or added by hand. A
+  refresh prices exactly what's in it.
+- **Import Daily Prop:** click the button and pick a
+  `Daily_Prop_Bod_Detail_YYYY_MM_DD.csv` (the picker opens in `Daily prop/`).
+  Its legs are **added** to the book, so importing the same file twice
+  duplicates them. Option expiries are counted from the date in the file
+  name and keep counting down on later days.
 - **Refresh:** runs automatically when the workbook opens. To run it on
   demand: Alt+F8 → `RefreshModel`.
 - **Changing Future Spot** re-runs the model around that contract.
@@ -54,12 +58,12 @@ collects everything; Python does the maths when you press a button.
   current Mark to Market.
 - **Removing legs:** the Positions table is one formula, so its rows can't be
   deleted directly. Select the row(s), using any cell in each, and click
-  *Remove selected legs*. Only manually added legs can be removed, because
-  Daily Prop legs come back from the file on every refresh.
-- **Clear Portfolio** (Alt+F8 → `ClearPortfolio`) removes all manually added
-  legs at once.
-- **Prices:** a live CQGXL quote always wins over the Daily Prop settlement.
-  Daily Prop is only used for contracts the watchlist doesn't quote.
+  *Remove selected legs*. This works for any leg, imported or manual.
+- **Clear Portfolio** (Alt+F8 → `ClearPortfolio`) empties the whole book.
+- **Prices:** a live CQGXL quote always wins. A contract that isn't on the
+  watchlist uses the settlement from the Daily Prop file its legs came from.
+  A leg with neither stays in the book but isn't priced, and the status line
+  names it.
 
 ## How it's built (read before editing)
 
@@ -71,9 +75,11 @@ collects everything; Python does the maths when you press a button.
   `ExpiryCandidates`, …), and Home displays them with formulas such as
   `=IF(Positions="","",Positions)`.
 - **Inputs are found by name, not address** (Formulas → Name Manager:
-  `FutureSpot`, `InterestRate`, `AddLeg_Type`, `AddLeg_Strike1`, …). To move
-  an input, **cut and paste** it so the name moves with it. Retyping it
-  elsewhere breaks the link.
+  `FutureSpot`, `InterestRate`, `AddLeg_Type`, `AddLeg_Strike1`, …, and the
+  live watchlist as `Watchlist_Corn` / `Watchlist_Soybean` / `Watchlist_Wheat`,
+  each a symbol column plus a price column). To move any of them, **cut and
+  paste** so the name moves along. Retyping elsewhere breaks the link. To
+  add contracts to a watchlist block, widen its name in Name Manager.
 - **The Interest Rate cell** is a formula on the latest SOFR. Typing a
   number over it sets a manual rate.
 - **The analytic sheets** (Greeks, Ladders, Heat Maps, Stress, Strike,

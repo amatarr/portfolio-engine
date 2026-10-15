@@ -27,3 +27,20 @@ Public Sub RemoveSelectedLegs()
 
     RunPython "import xlwings_refresh; xlwings_refresh.remove_legs('" & Mid(picked, 2) & "')"
 End Sub
+
+' Adds the legs of a chosen Daily Prop CSV to the book, on top of what's
+' already there. The picker opens in the workbook's "Daily prop" folder.
+Public Sub ImportDailyProp()
+    Dim picked As Variant, pyPath As String
+
+    On Error Resume Next
+    ChDrive Left(ThisWorkbook.Path, 1)
+    ChDir ThisWorkbook.Path & "\Daily prop"
+    On Error GoTo 0
+
+    picked = Application.GetOpenFilename("Daily Prop file (*.csv),*.csv", , "Import Daily Prop positions")
+    If VarType(picked) = vbBoolean Then Exit Sub  ' cancelled
+
+    pyPath = Replace(Replace(CStr(picked), "\", "\\"), "'", "\'")
+    RunPython "import xlwings_refresh; xlwings_refresh.import_daily_prop('" & pyPath & "')"
+End Sub

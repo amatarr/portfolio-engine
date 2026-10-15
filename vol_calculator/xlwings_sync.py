@@ -23,26 +23,29 @@ from vol_calculator.scenarios import (
     payoff_diagram,
 )
 
-# (commodity, symbol_col, price_col) -- matches the Home sheet's own live
-# CQGXL watchlist layout (rows 3-8 under each commodity header). Same
-# block push_quotes_supabase.py reads to feed Streamlit; shared here so
-# xlwings_refresh.py can price contracts that aren't in today's Daily
-# Prop file too (e.g. a brand-new leg added by hand), instead of only
-# ever having a price when CSV-imported.
-_CQG_BLOCKS = [("Corn", 1, 2), ("Soybean", 5, 6), ("SRW Wheat", 9, 10)]
-_CQG_ROWS = range(3, 9)
+# The live CQGXL watchlist, one named block per commodity: a symbol
+# column and a price column, one row per contract. Found by name, like
+# every other input, so the watchlist can be moved anywhere on the
+# workbook. Same quotes push_quotes_supabase.py sends to Streamlit.
+WATCHLIST_NAMES = {
+    "Watchlist_Corn": "Corn",
+    "Watchlist_Soybean": "Soybean",
+    "Watchlist_Wheat": "SRW Wheat",
+}
 
 
-def xw_read_live_quotes(sheet):
-    """Reads the Home sheet's live CQGXL watchlist -- [{"commodity", "contract", "price"}, ...]. Skips a cell showing text (e.g. "Disconnected from server.") instead of a number."""
+def xw_read_live_quotes(wb):
+    """Reads the live CQGXL watchlist -- [{"commodity", "contract", "price"}, ...]. Skips a cell showing text (e.g. "Disconnected from server.") instead of a number, and a commodity whose block isn't named in this workbook."""
 
     quotes = []
 
-    for commodity, symbol_col, price_col in _CQG_BLOCKS:
-        for row in _CQG_ROWS:
-            symbol = sheet.range((row, symbol_col)).value
-            price = sheet.range((row, price_col)).value
+    for name, commodity in WATCHLIST_NAMES.items():
+        try:
+            block = wb.names[name].refers_to_range.options(ndim=2).value
+        except Exception:
+            continue
 
+        for symbol, price, *_ in block:
             if not symbol or price is None:
                 continue
 
@@ -75,12 +78,18 @@ _XL_THIN = 2
 
 DATA_SHEET = "_Data"
 
+# The book: every leg, whether imported from a Daily Prop file or added
+# by hand, as entered -- plus each leg's settlement from the file it came
+# from (the price fallback for a contract the watchlist doesn't quote)
+# and its real expiry date, so days-to-expiry can be recomputed daily.
+BOOK_HEADERS = POSITIONS_HEADERS + ["Settlement", "Expiry Date"]
+
 # name -> (first column, width); every block starts at row 1. Columns
-# from AO onward are left to the workbook's own helper formulas (the
-# filtered dropdown lists for Add Leg) and are never written here.
+# AO-AQ hold the workbook's own helper formulas (the filtered dropdown
+# lists for Add Leg) and are never written here.
 _DATA_BLOCKS = {
     "Positions": ("A", len(POSITIONS_HEADERS)),
-    "ManualLegs": ("M", len(POSITIONS_HEADERS)),
+    "Book": ("AS", len(BOOK_HEADERS)),
     "ContractList": ("Y", 1),
     "PortfolioContracts": ("Z", 1),
     "LegTypes": ("AA", 1),
@@ -138,21 +147,20 @@ def xw_read_data_value(wb, name):
     return wb.sheets[DATA_SHEET].range(_DATA_VALUES[name]).value
 
 
-def xw_write_manual_legs(wb, rows):
+def xw_write_book(wb, rows):
 
     xw_write_data_block(
-        wb, "ManualLegs",
-        [POSITIONS_HEADERS] + [[row.get(h) for h in POSITIONS_HEADERS] for row in rows],
+        wb, "Book", [BOOK_HEADERS] + [[row.get(h) for h in BOOK_HEADERS] for row in rows],
     )
 
 
-def xw_read_manual_legs(wb):
-    """Manual legs are stored on _Data, not read back off the visible Positions table -- that table can be rearranged freely without losing them."""
+def xw_read_book(wb):
+    """The book is stored on _Data, not read back off the visible Positions table -- that table can be rearranged freely without losing legs."""
 
-    block = xw_read_data_block(wb, "ManualLegs")
-    if not block or block[0] != POSITIONS_HEADERS:
+    block = xw_read_data_block(wb, "Book")
+    if not block or block[0] != BOOK_HEADERS:
         return []
-    return [dict(zip(POSITIONS_HEADERS, row)) for row in block[1:] if row[0] is not None]
+    return [dict(zip(BOOK_HEADERS, row)) for row in block[1:] if row[0] is not None]
 
 
 # --- Named input cells ---------------------------------------------------------
