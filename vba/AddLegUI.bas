@@ -5,9 +5,9 @@ Option Explicit
 ' Suggestions are built from the _Data sheet (ContractQuotes,
 ' ExpiryCandidates), which every refresh rewrites, so they fill instantly
 ' without calling Python. Only a Future Spot change runs Python, to
-' recompute the whole model around the new spot.
+' recompute the analysis sheets set to "Follow Home" around the new spot.
 
-Private Const PY_REFRESH As String = "import xlwings_refresh; xlwings_refresh.main()"
+Private Const PY_SPOT_CHANGE As String = "import xlwings_refresh; xlwings_refresh.refresh_follow_home()"
 
 ' The configurable rows, top to bottom. RowLabels and Suggestions return
 ' one entry per row, in this same order.
@@ -188,7 +188,7 @@ Public Sub OnHomeChange(ByVal Target As Range)
     Application.EnableEvents = False
 
     If Hit(Target, "FutureSpot") Then
-        RunPython PY_REFRESH
+        RunPython PY_SPOT_CHANGE
     ElseIf Hit(Target, "AddLeg_Commodity") Then
         Cell("AddLeg_Contract").Value = FirstContractFor(CStr(Target.Value))
         FillSuggestions

@@ -11,7 +11,7 @@ collects everything; Python does the maths when you press a button.
 | `Position_Analysis.xlsm` | The workbook. Open it from **this** folder, since the buttons look for the Python files next to it. |
 | `xlwings_refresh.py` | What the buttons run: reads the book, prices it, writes the results into the workbook. |
 | `vol_calculator/` | The pricing engine: instruments, Black-76 pricing, Greeks, scenarios, Daily Prop import, CME expiry calendar. |
-| `vba/` | Readable copies of the macros inside the workbook: `AddLegUI.bas` (Add Leg autofill) and `PositionsUI.bas` (Import Daily Prop, Remove selected legs). |
+| `vba/` | Readable copies of the macros inside the workbook: `AddLegUI.bas` (Add Leg autofill) and `PositionsUI.bas` (Import Daily Prop, Remove selected legs), `AnalysisUI.bas` (per-sheet spot switches). |
 | `Daily prop/` | Put the Daily Prop file here (see below). |
 | `requirements.txt` | Python packages to install. |
 
@@ -49,7 +49,11 @@ collects everything; Python does the maths when you press a button.
   name and keep counting down on later days.
 - **Refresh:** runs automatically when the workbook opens. To run it on
   demand: Alt+F8 → `RefreshModel`.
-- **Changing Future Spot** re-runs the model around that contract.
+- **Spot switches:** Home's *Future Spot* picks the contract the analysis
+  sheets shift. Each analysis sheet (except Strike) also has its own *Spot*
+  dropdown in B1: *Follow Home* (the default) tracks Home, and picking a
+  contract there recomputes that sheet only. C1 shows the contract in use.
+  Changing Home's Future Spot recomputes only the sheets following it.
 - **Add Leg:** pick Type, Commodity and Contract, and every field fills
   with a suggestion: live underlying, at-the-money strike, the contract's
   real CME expiries, and default vols. Overwrite anything, then click
@@ -82,10 +86,17 @@ collects everything; Python does the maths when you press a button.
   add contracts to a watchlist block, widen its name in Name Manager.
 - **The Interest Rate cell** is a formula on the latest SOFR. Typing a
   number over it sets a manual rate.
-- **The analytic sheets** (Greeks, Ladders, Heat Maps, Stress, Strike,
-  Payoff, Breakevens) are still written directly by Python. Formatting you
-  add there gets overwritten for now; moving them to the same `_Data`
-  approach is the next step.
+- **The analysis sheets** (Greeks, Ladders, Heat Maps, Stress, Strike,
+  Payoff, Breakevens) work the same way, through the hidden `_Calc` sheet:
+  every table there has a name (`Greeks_Tenor`, `Stress_delta_price`,
+  `Payoff_Table`, …), and the sheets show them with formulas. Their layout,
+  formatting and charts are yours to change. Keep the charts pointing at
+  the cells the formulas fill, and don't rename these sheets: the spot
+  switches find them by name.
+- **Greeks by tenor** has one row per futures month, with options split by
+  contract and expiry. Each row's Greeks are taken against that row's own
+  contract, and Total is the sum of the rows. The summary table above it is
+  against the sheet's spot.
 
 ## Where to change what
 
@@ -93,6 +104,7 @@ collects everything; Python does the maths when you press a button.
 |---|---|
 | Pricing, Greeks, scenarios, structures | `vol_calculator/` |
 | What a refresh computes or writes to `_Data` | `xlwings_refresh.py` and `vol_calculator/xlwings_sync.py` |
+| What each analysis sheet computes (written to `_Calc`) | `vol_calculator/xlwings_analysis.py` |
 | Add Leg defaults, labels, greyed-out rows | The `AddLegUI` module in Excel (Alt+F11). Then copy it back into `vba/AddLegUI.bas` (right-click the module → Export File) so the readable copy stays current. |
 | Home's look and layout | Directly in Excel |
 

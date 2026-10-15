@@ -6,6 +6,7 @@ from scipy.optimize import brentq
 
 from vol_calculator.greeks import GreekEngine, shift_portfolio_vols, shift_time
 from vol_calculator.instruments import Portfolio, Structure, Future, AmericanOption
+from vol_calculator.contracts import _CME_MONTH_TO_NUMBER
 
 
 def _bump_contract_price(market, contract, new_price):
@@ -360,7 +361,7 @@ def payoff_diagram(
     return pd.DataFrame(rows)
 
 
-def report_by_tenor(portfolio, market, contract=None):
+def report_by_tenor(portfolio, market, contract=None, by_contract=False):
     """
     GreekEngine.report_dollars(), broken out by tenor bucket (each distinct
     expiry_days value, plus a separate "Futures" bucket for legs with no
@@ -370,9 +371,17 @@ def report_by_tenor(portfolio, market, contract=None):
     with respect to `contract`, same as everywhere else. Same $k scale as
     GreekEngine.report_dollars, so it's directly comparable to the main
     Greek Summary table.
+
+    by_contract=True buckets by contract as well: each futures month gets
+    its own row, and options are split by contract and expiry. Each row's
+    Greeks are then taken with respect to that row's own contract, and the
+    Total row is the sum of the rows.
     """
 
     legs = _flatten_positions(portfolio.positions)
+
+    if by_contract:
+        return _report_by_contract_tenor(legs, market)
 
     buckets = {}
 
@@ -401,6 +410,34 @@ def report_by_tenor(portfolio, market, contract=None):
     rows.append(total)
 
     return pd.DataFrame(rows).set_index("Tenor")
+
+
+def _contract_sort_key(contract):
+    """Chronological within a commodity: ZCZ26 before ZCH27 (plain string order would put H27 first)."""
+
+    return contract[:-3], contract[-2:], _CME_MONTH_TO_NUMBER.get(contract[-3], 0)
+
+
+def _report_by_contract_tenor(legs, market):
+
+    buckets = {}
+    for leg in legs:
+        expiry = None if isinstance(leg, Future) else leg.expiry_days
+        buckets.setdefault((leg.contract, expiry), Portfolio()).add(leg)
+
+    def sort_key(key):
+        contract, expiry = key
+        return _contract_sort_key(contract), -1 if expiry is None else expiry
+
+    rows = []
+    for contract, expiry in sorted(buckets, key=sort_key):
+        label = f"{contract} Future" if expiry is None else f"{contract} {expiry}d"
+        report = GreekEngine.report_dollars(buckets[(contract, expiry)], market, contract)
+        rows.append({"Tenor": label, **report})
+
+    df = pd.DataFrame(rows).set_index("Tenor")
+    df.loc["Total"] = df.sum()
+    return df
 
 
 _STRESS_GREEKS = {

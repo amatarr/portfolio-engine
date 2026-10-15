@@ -14,6 +14,7 @@ restyled by a refresh.
 
 import os
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 
 import xlwings as xw
 
@@ -31,11 +32,8 @@ from vol_calculator.xlwings_sync import (
     xw_read_add_leg_inputs, xw_clear_add_leg_inputs,
     xw_read_future_spot, xw_read_interest_rate,
     xw_read_live_quotes,
-    xw_write_greeks_sheet,
-    xw_write_spot_vol_ladder_sheet, xw_write_heat_maps_sheet,
-    xw_write_stress_sheet, xw_write_strike_sheet,
-    xw_write_payoff_sheet, xw_write_breakevens_sheet,
 )
+from vol_calculator.xlwings_analysis import FOLLOW_HOME, xw_write_analysis, xw_sheets_following_home
 
 # Absolute, anchored to this script's own folder: RunPython launches
 # Python with an unrelated working directory, and a terminal run must not
@@ -43,7 +41,6 @@ from vol_calculator.xlwings_sync import (
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKBOOK_PATH = os.path.join(_PROJECT_DIR, "Position_Analysis.xlsm")
 DEFAULT_INTEREST_RATE = 0.039
-ANALYTIC_SHEETS = ["Greeks", "Spot&Vol Ladder", "Heat Maps", "Stress", "Strike", "Payoff", "Breakevens"]
 
 
 def _get_workbook():
@@ -107,38 +104,48 @@ def _imported_row(instrument, meta, as_of):
     return _with_expiry_date(row, as_of)
 
 
-def _refresh():
-    """Prices every leg in the book and rewrites the Positions table, dropdown lists and analytic sheets."""
+def _build_model(wb, interest_rate):
+    """
+    The book, priced. A live CQGXL quote always wins over a Daily Prop
+    settlement -- the file can be days old, and every price derived from it
+    (Underlying Price, Mark to Market, Greeks) would be stale with it.
+    Settlements only cover contracts the watchlist doesn't quote. A leg on
+    a contract with no price anywhere stays in the book but is left out
+    of the portfolio rather than taking down the whole refresh.
+    """
 
-    wb = _get_workbook()
     today = date.today()
-
     book = xw_read_book(wb)
     for row in book:
         if row.get("Expiry Date"):
             row["Expiry (d)"] = max((_as_date(row["Expiry Date"]) - today).days, 1)
 
-    # A live CQGXL quote always wins over a Daily Prop settlement -- the
-    # file can be days old, and every price derived from it (Underlying
-    # Price, Mark to Market, Greeks) would be stale with it. Settlements
-    # only cover contracts the watchlist doesn't quote.
     prices = {row["Contract"]: row["Settlement"] for row in book if row.get("Settlement") is not None}
     live_prices = {q["contract"]: q["price"] for q in xw_read_live_quotes(wb)}
     prices.update(live_prices)
 
-    # A leg on a contract with no price anywhere stays in the book, but
-    # can't be valued -- it's shown without prices and left out of the
-    # portfolio rather than taking down the whole refresh.
     legs = [(row, *_row_to_instrument(row)) for row in book]
     priced = [(row, instrument, meta) for row, instrument, meta in legs if meta["contract"] in prices]
-    unpriced = _unique(row["Contract"] for row, _, meta in legs if meta["contract"] not in prices)
 
     portfolio = Portfolio()
     for _, instrument, _ in priced:
         portfolio.add(instrument)
 
-    portfolio_contracts = _unique(meta["contract"] for _, _, meta in priced)
-    add_leg_contracts = _unique([row["Contract"] for row in book] + list(live_prices))
+    return SimpleNamespace(
+        book=book,
+        legs=legs,
+        portfolio=portfolio,
+        contracts=_unique(meta["contract"] for _, _, meta in priced),
+        unpriced=_unique(meta["contract"] for _, _, meta in legs if meta["contract"] not in prices),
+        live_prices=live_prices,
+        market=Market(futures_prices=prices, interest_rate=interest_rate),
+    )
+
+
+def _refresh():
+    """Prices every leg in the book and rewrites the Positions table, dropdown lists and every analysis sheet."""
+
+    wb = _get_workbook()
 
     sofr = None
     sofr_error = None
@@ -146,18 +153,19 @@ def _refresh():
         sofr = fetch_latest_sofr()
     except Exception as e:
         sofr_error = f"{type(e).__name__}: {e}"
+    _write_sofr(wb, sofr, sofr_error)
+
+    model = _build_model(wb, xw_read_interest_rate(wb, fallback_rate=DEFAULT_INTEREST_RATE))
+    market = model.market
+    add_leg_contracts = _unique([row["Contract"] for row in model.book] + list(model.live_prices))
 
     # Dropdown sources -- the visible dropdowns point at these names, so
     # only the list contents change here, never the dropdowns themselves.
     xw_write_data_block(wb, "ContractList", [[c] for c in add_leg_contracts])
-    xw_write_data_block(wb, "PortfolioContracts", [[c] for c in portfolio_contracts])
+    xw_write_data_block(wb, "PortfolioContracts", [[c] for c in model.contracts])
+    xw_write_data_block(wb, "SpotChoices", [[FOLLOW_HOME]] + [[c] for c in model.contracts])
     xw_write_data_block(wb, "LegTypes", [[t] for t in ADD_LEG_TYPES])
     xw_write_data_block(wb, "OptionTypes", [["call"], ["put"]])
-
-    _write_sofr(wb, sofr, sofr_error)
-    interest_rate = xw_read_interest_rate(wb, fallback_rate=DEFAULT_INTEREST_RATE)
-
-    market = Market(futures_prices=prices, interest_rate=interest_rate)
 
     # What Add Leg's suggestions are built from (in the workbook's own
     # VBA, so they fill instantly without a Python round-trip): each
@@ -175,9 +183,9 @@ def _refresh():
     # same as Streamlit) are the engine's current price; a blank Entry
     # Price shows the *current* Mark to Market, never a frozen one.
     position_rows = [POSITIONS_HEADERS]
-    for row, instrument, meta in legs:
+    for row, instrument, meta in model.legs:
         shown = {h: row.get(h) for h in POSITIONS_HEADERS}
-        if meta["contract"] in prices:
+        if meta["contract"] in market.futures_prices:
             shown["Underlying Price"] = compute_underlying_price(meta["contract"], market)
             if isinstance(instrument, AmericanOption):
                 shown["Mark to Market"] = compute_model_price(instrument, meta, market)
@@ -186,33 +194,43 @@ def _refresh():
         position_rows.append([shown[h] for h in POSITIONS_HEADERS])
     xw_write_data_block(wb, "Positions", position_rows)
 
-    if unpriced:
+    if model.unpriced:
         xw_write_data_value(
             wb, "AddLegStatus",
-            f"Not priced (no live quote or Daily Prop settlement): {', '.join(unpriced)}",
+            f"Not priced (no live quote or Daily Prop settlement): {', '.join(model.unpriced)}",
         )
 
-    future_spot = xw_read_future_spot(wb, portfolio_contracts)
-    if portfolio_contracts:
-        xw_write_greeks_sheet(wb.sheets["Greeks"], portfolio, market, portfolio_contracts)
-        xw_write_spot_vol_ladder_sheet(wb.sheets["Spot&Vol Ladder"], portfolio, market, future_spot)
-        xw_write_heat_maps_sheet(wb.sheets["Heat Maps"], portfolio, market, future_spot)
-        xw_write_stress_sheet(wb.sheets["Stress"], portfolio, market, future_spot)
-        xw_write_strike_sheet(wb.sheets["Strike"], portfolio, market)
-        xw_write_payoff_sheet(wb.sheets["Payoff"], portfolio, market, future_spot)
-        xw_write_breakevens_sheet(wb.sheets["Breakevens"], portfolio, market, future_spot)
-    else:
-        # Nothing priced to analyse (empty book) -- clear the previous
-        # book's results rather than leave them looking current.
-        for name in ANALYTIC_SHEETS:
-            wb.sheets[name].used_range.clear_contents()
+    home_spot = xw_read_future_spot(wb, model.contracts)
+    xw_write_analysis(wb, model.portfolio, market, model.contracts, home_spot)
 
     wb.save()
 
     print(
-        f"Refreshed (live) -- {len(book)} legs ({len(priced)} priced), {len(portfolio_contracts)} contracts, "
-        f"Future Spot={future_spot}, Interest Rate={interest_rate * 100:.2f}%"
+        f"Refreshed (live) -- {len(model.book)} legs ({len(model.legs) - len(model.unpriced)} priced), "
+        f"{len(model.contracts)} contracts, Future Spot={home_spot}, Interest Rate={market.interest_rate * 100:.2f}%"
     )
+
+
+def refresh_sheet(sheet):
+    """Recomputes one analysis sheet only -- run when that sheet's own Spot selector changes."""
+
+    wb = _get_workbook()
+    model = _build_model(wb, xw_read_interest_rate(wb, fallback_rate=DEFAULT_INTEREST_RATE))
+    home_spot = xw_read_future_spot(wb, model.contracts)
+    xw_write_analysis(wb, model.portfolio, model.market, model.contracts, home_spot, sheets=[sheet])
+    wb.save()
+
+
+def refresh_follow_home():
+    """Recomputes only the analysis sheets set to "Follow Home" -- run when Home's Future Spot changes."""
+
+    wb = _get_workbook()
+    model = _build_model(wb, xw_read_interest_rate(wb, fallback_rate=DEFAULT_INTEREST_RATE))
+    sheets = xw_sheets_following_home(wb, model.contracts)
+    if sheets:
+        home_spot = xw_read_future_spot(wb, model.contracts)
+        xw_write_analysis(wb, model.portfolio, model.market, model.contracts, home_spot, sheets=sheets)
+    wb.save()
 
 
 def main():
