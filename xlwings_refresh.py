@@ -121,7 +121,8 @@ def _build_model(wb, interest_rate):
             row["Expiry (d)"] = max((_as_date(row["Expiry Date"]) - today).days, 1)
 
     prices = {row["Contract"]: row["Settlement"] for row in book if row.get("Settlement") is not None}
-    live_prices = {q["contract"]: q["price"] for q in xw_read_live_quotes(wb)}
+    live_quotes = xw_read_live_quotes(wb)
+    live_prices = {q["contract"]: q["price"] for q in live_quotes}
     prices.update(live_prices)
 
     legs = [(row, *_row_to_instrument(row)) for row in book]
@@ -138,6 +139,7 @@ def _build_model(wb, interest_rate):
         contracts=_unique(meta["contract"] for _, _, meta in priced),
         unpriced=_unique(meta["contract"] for _, _, meta in legs if meta["contract"] not in prices),
         live_prices=live_prices,
+        live_cells={q["contract"]: q["cell"] for q in live_quotes},
         market=Market(futures_prices=prices, interest_rate=interest_rate),
     )
 
@@ -169,9 +171,19 @@ def _refresh():
 
     # What Add Leg's suggestions are built from (in the workbook's own
     # VBA, so they fill instantly without a Python round-trip): each
-    # offered contract's current price, and its real CME option expiries.
+    # offered contract's price, and its real CME option expiries. A
+    # watchlist contract's price is a formula on its live cell, so Add
+    # Leg's Underlying and suggested strikes tick with CQGXL between
+    # refreshes; it falls back to this refresh's price while the cell
+    # shows text (e.g. disconnected). Pricing itself still only happens
+    # in Python, when a leg is added or the book refreshed.
+    def quote(c):
+        cell = model.live_cells.get(c)
+        price = market.futures_prices.get(c)
+        return f"=IF(ISNUMBER({cell}),{cell},{price})" if cell else price
+
     xw_write_data_block(wb, "ContractQuotes", [
-        [c, commodity_from_contract(c), market.futures_prices.get(c)] for c in add_leg_contracts
+        [c, commodity_from_contract(c), quote(c)] for c in add_leg_contracts
     ])
     xw_write_data_block(wb, "ExpiryCandidates", [
         [c, candidate["label"], candidate["days"]]

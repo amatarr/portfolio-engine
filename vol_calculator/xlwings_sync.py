@@ -23,17 +23,17 @@ WATCHLIST_NAMES = {
 
 
 def xw_read_live_quotes(wb):
-    """Reads the live CQGXL watchlist -- [{"commodity", "contract", "price"}, ...]. Skips a cell showing text (e.g. "Disconnected from server.") instead of a number, and a commodity whose block isn't named in this workbook."""
+    """Reads the live CQGXL watchlist -- [{"commodity", "contract", "price", "cell"}, ...], where cell is the sheet-qualified address of the live price, for formulas that should tick with it. Skips a cell showing text (e.g. "Disconnected from server.") instead of a number, and a commodity whose block isn't named in this workbook."""
 
     quotes = []
 
     for name, commodity in WATCHLIST_NAMES.items():
         try:
-            block = wb.names[name].refers_to_range.options(ndim=2).value
+            rng = wb.names[name].refers_to_range
         except Exception:
             continue
 
-        for symbol, price, *_ in block:
+        for i, (symbol, price, *_) in enumerate(rng.options(ndim=2).value):
             if not symbol or price is None:
                 continue
 
@@ -46,6 +46,7 @@ def xw_read_live_quotes(wb):
                 "commodity": commodity,
                 "contract": _convert_cqg_symbol(str(symbol)),
                 "price": price,
+                "cell": f"'{rng.sheet.name}'!{rng[i, 1].address}",
             })
 
     return quotes
