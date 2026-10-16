@@ -53,17 +53,6 @@ st.markdown(
     div[data-testid="stTextInput"] { max-width: 240px; }
     div[data-testid="stSelectbox"] { max-width: 240px; }
 
-    /* Quotes box: tight rows (label + price) instead of normal widget
-       spacing, so a dozen contracts don't take a dozen widgets' worth
-       of vertical room. */
-    .st-key-cqg_quotes_box div[data-testid="stVerticalBlockBorderWrapper"],
-    .st-key-cqg_quotes_box div[data-testid="stHorizontalBlock"] {
-        margin-bottom: -0.6rem;
-    }
-    .st-key-cqg_quotes_box div[data-testid="stNumberInput"] input {
-        padding-top: 0.25rem; padding-bottom: 0.25rem; height: 1.8rem;
-    }
-
     .st-key-add_leg_btn button {
         background-color: #2e7d32; color: white; border-color: #1b5e20;
     }
@@ -520,28 +509,34 @@ def _render_quotes_box():
                     st.caption("-")
                     continue
 
-                # One tight inline row per contract (label + editable
-                # price + ATM IV) instead of a full data_editor grid --
-                # no header row or hover toolbar per commodity, just the
-                # numbers. ATM IV has no data source yet (kept as an
-                # empty, disabled placeholder -- not computed/wired in).
-                for code in codes:
-                    price = float(_price_for(code))
-                    label_col, price_col, iv_col = st.columns([1, 1, 0.8])
-                    label_col.markdown(f"<div style='padding-top:0.5rem'>{code}</div>", unsafe_allow_html=True)
-                    # Keying on the live price forces Streamlit to treat
-                    # a real tick as a new widget -- a number_input's
-                    # value= is only its default on first creation, same
-                    # reasoning as the data_editor it replaces.
-                    edited_price = price_col.number_input(
-                        code, value=price, step=0.25, format="%.2f",
-                        label_visibility="collapsed", key=f"quote_price_{code}_{price:.4f}",
-                    )
-                    iv_col.text_input(
-                        f"{code} ATM IV", value="", placeholder="ATM IV",
-                        disabled=True, label_visibility="collapsed", key=f"quote_iv_{code}",
-                    )
+                # One small editable table per commodity: it sizes its
+                # columns to fit, so codes don't wrap and prices aren't cut
+                # off in a narrow column the way per-row inputs were. ATM
+                # IV has no data source yet -- an empty, read-only column.
+                prices = [float(_price_for(code)) for code in codes]
+                quotes_df = pd.DataFrame({"Contract": codes, "Price": prices, "ATM IV": [None] * len(codes)})
 
+                # A data_editor only uses its data as the default when first
+                # created -- folding the prices into the key makes a live
+                # tick show up instead of the first value sticking.
+                price_signature = "_".join(f"{p:.4f}" for p in prices)
+                row_height = 32
+                edited_df = st.data_editor(
+                    quotes_df,
+                    hide_index=True,
+                    width="stretch",
+                    height=row_height * (len(codes) + 1) + 3,
+                    row_height=row_height,
+                    disabled=["Contract", "ATM IV"],
+                    key=f"quotes_editor_{comm}_{price_signature}",
+                    column_config={
+                        "Contract": st.column_config.TextColumn("Contract", width="small"),
+                        "Price": st.column_config.NumberColumn("Price", format="%.2f", step=0.25, width="small"),
+                        "ATM IV": st.column_config.NumberColumn("ATM IV", format="%.2f", width="small"),
+                    },
+                )
+
+                for code, edited_price in zip(edited_df["Contract"], edited_df["Price"]):
                     if code in st.session_state.csv_locked_contracts:
                         # Pinned contract: this box is informational only
                         # for it, never writes back into the engine's price.
