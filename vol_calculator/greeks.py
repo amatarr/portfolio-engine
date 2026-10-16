@@ -252,5 +252,7 @@ class GreekEngine:
 
             "Vanna-D (ΔDelta/1 vol pt)": GreekEngine.vanna_delta(portfolio, market, contract),
 
-            "Vanna-V (ΔVega/¢)": GreekEngine.vanna_vega(portfolio, market, contract)
+            # Same cross-derivative as Vanna-D, but Vega is money: converted to
+            # $k like the Vega row (x multiplier/1000 = x0.05 for 5,000 bu).
+            "Vanna-V ($k Vega/1¢)": GreekEngine.vanna_vega(portfolio, market, contract) * to_k
         }
