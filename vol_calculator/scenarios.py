@@ -6,7 +6,12 @@ from scipy.optimize import brentq
 
 from vol_calculator.greeks import GreekEngine, shift_portfolio_vols, shift_time
 from vol_calculator.instruments import Portfolio, Structure, Future, AmericanOption
-from vol_calculator.contracts import _CME_MONTH_TO_NUMBER
+from vol_calculator.contracts import (
+    _CME_MONTH_TO_NUMBER,
+    MONTH_CODES,
+    commodity_from_contract,
+    option_expiry_candidates,
+)
 
 
 def _bump_contract_price(market, contract, new_price):
@@ -361,21 +366,25 @@ def payoff_diagram(
     return pd.DataFrame(rows)
 
 
-def report_by_tenor(portfolio, market, contract=None, by_contract=False):
+def report_by_tenor(portfolio, market, contract=None, by_contract=False, commodity=None):
     """
-    GreekEngine.report_dollars(), broken out by tenor bucket (each distinct
-    expiry_days value, plus a separate "Futures" bucket for legs with no
-    expiry) with a "Total" row for the whole book. Structures are
-    flattened to their individual legs first, so a calendar spread's two
-    legs correctly land in two different tenor rows. Delta/Gamma/etc are
-    with respect to `contract`, same as everywhere else. Same $k scale as
-    GreekEngine.report_dollars, so it's directly comparable to the main
+    GreekEngine.report_dollars(), grouped by underlying futures contract.
+    Each contract's futures row comes first, followed by its option rows in
+    expiry order, with a "Total" row for the included positions. Structures
+    are flattened to their individual legs first, so a calendar spread's two
+    legs correctly land in different tenor rows. By default, Delta/Gamma/etc
+    are with respect to `contract`, same as everywhere else. Same $k scale
+    as GreekEngine.report_dollars, so it's directly comparable to the main
     Greek Summary table.
 
     by_contract=True buckets by contract as well: each futures month gets
     its own row, and options are split by contract and expiry. Each row's
     Greeks are then taken with respect to that row's own contract, and the
     Total row is the sum of the rows.
+
+    When commodity is set, only that commodity's legs are included. Each
+    row is measured against its own underlying contract, and Total sums the
+    rows, representing parallel price/volatility moves across the commodity.
     """
 
     legs = _flatten_positions(portfolio.positions)
@@ -383,25 +392,46 @@ def report_by_tenor(portfolio, market, contract=None, by_contract=False):
     if by_contract:
         return _report_by_contract_tenor(legs, market)
 
+    if commodity is not None:
+        commodity_legs = [
+            leg for leg in legs
+            if commodity_from_contract(leg.contract, fallback=None) == commodity
+        ]
+        return _report_by_contract_tenor(commodity_legs, market, descriptive_labels=True)
+
     buckets = {}
 
     for leg in legs:
+        expiry = None if isinstance(leg, Future) else leg.expiry_days
+        buckets.setdefault((leg.contract, expiry), Portfolio())
+        buckets[(leg.contract, expiry)].add(leg)
 
-        label = "Futures" if isinstance(leg, Future) else leg.expiry_days
-
-        buckets.setdefault(label, Portfolio())
-        buckets[label].add(leg)
-
-    def sort_key(label):
-        return (-1, 0) if label == "Futures" else (0, label)
+    def sort_key(key):
+        underlying, expiry = key
+        contract_order = _contract_sort_key(underlying) if underlying else ("", "", 0)
+        return contract_order, -1 if expiry is None else expiry
 
     rows = []
 
-    for label in sorted(buckets.keys(), key=sort_key):
+    for underlying, expiry in sorted(buckets, key=sort_key):
+        if underlying:
+            month_code = underlying[-3] if len(underlying) >= 3 else ""
+            year_code = underlying[-2:] if len(underlying) >= 2 else ""
+            month = MONTH_CODES.get(month_code)
+            contract_month = f"{month} 20{year_code}" if month and year_code.isdigit() else underlying
+        else:
+            contract_month = "Unknown contract"
 
-        row_label = label if label == "Futures" else f"{label}d"
+        if expiry is None:
+            row_label = f"{contract_month} Futures ({underlying or 'unknown'})"
+        else:
+            option_month = _option_month_for_bucket(
+                buckets[(underlying, expiry)], underlying, expiry
+            )
+            month_label = f"{option_month} " if option_month else ""
+            row_label = f"{month_label}Options ({expiry}d, {underlying or 'unknown'})"
 
-        report = GreekEngine.report_dollars(buckets[label], market, contract)
+        report = GreekEngine.report_dollars(buckets[(underlying, expiry)], market, contract)
         report = {"Tenor": row_label, **report}
 
         rows.append(report)
@@ -418,7 +448,20 @@ def _contract_sort_key(contract):
     return contract[:-3], contract[-2:], _CME_MONTH_TO_NUMBER.get(contract[-3], 0)
 
 
-def _report_by_contract_tenor(legs, market):
+def _option_month_for_bucket(bucket, contract, expiry):
+    for leg in bucket.positions:
+        if isinstance(leg, AmericanOption) and getattr(leg, "option_month", None):
+            return leg.option_month
+
+    if contract:
+        for candidate in option_expiry_candidates(contract):
+            if candidate["days"] == expiry:
+                return candidate["option_month"]
+
+    return None
+
+
+def _report_by_contract_tenor(legs, market, descriptive_labels=False):
 
     buckets = {}
     for leg in legs:
@@ -431,7 +474,21 @@ def _report_by_contract_tenor(legs, market):
 
     rows = []
     for contract, expiry in sorted(buckets, key=sort_key):
-        label = f"{contract} Future" if expiry is None else f"{contract} {expiry}d"
+        if descriptive_labels:
+            month_code = contract[-3] if contract and len(contract) >= 3 else ""
+            year_code = contract[-2:] if contract and len(contract) >= 2 else ""
+            month = MONTH_CODES.get(month_code)
+            contract_month = f"{month} 20{year_code}" if month and year_code.isdigit() else contract
+            if expiry is None:
+                label = f"{contract_month} Futures ({contract or 'unknown'})"
+            else:
+                option_month = _option_month_for_bucket(
+                    buckets[(contract, expiry)], contract, expiry
+                )
+                month_label = f"{option_month} " if option_month else ""
+                label = f"{month_label}Options ({expiry}d, {contract or 'unknown'})"
+        else:
+            label = f"{contract} Future" if expiry is None else f"{contract} {expiry}d"
         report = GreekEngine.report_dollars(buckets[(contract, expiry)], market, contract)
         rows.append({"Tenor": label, **report})
 

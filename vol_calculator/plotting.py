@@ -25,14 +25,15 @@ def plot_surface(
         metric=metric
     )
 
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(8, 5))
 
     sns.heatmap(
         surface,
         annot=True,
         fmt=".1f",
         cmap="RdYlGn" if metric == "PnL" else "coolwarm",
-        center=0
+        center=0,
+        annot_kws={"size": 8},
     )
 
     plt.title(
@@ -49,14 +50,15 @@ def plot_strike_map(portfolio, market=None, weight="quantity"):
 
     grid = strike_map(portfolio, market=market, weight=weight)
 
-    plt.figure(figsize=(10, max(4, 0.6 * len(grid.index))))
+    plt.figure(figsize=(8, 5))
 
     sns.heatmap(
         grid,
         annot=True,
         fmt=".1f",
         cmap="coolwarm",
-        center=0
+        center=0,
+        annot_kws={"size": 8},
     )
 
     label = "Net Quantity" if weight == "quantity" else "Net Delta"
@@ -151,7 +153,7 @@ def plot_payoff(
         step=step
     )
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 5))
 
     for days in time_steps:
         plt.plot(

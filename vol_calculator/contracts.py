@@ -179,11 +179,22 @@ def option_expiry_candidates(contract, today=None):
         kind = "standard" if is_standard else "serial"
         candidates.append({
             "label": f"{month_name} {year} ({kind}) -- {expiry_date.isoformat()}, {days}d",
+            "option_month": f"{month_name} {year}",
             "expiry_date": expiry_date,
             "days": days,
         })
 
     return candidates
+
+
+def option_month_for_expiry(contract, expiry_date, today=None):
+    """Return the named option month for an exact candidate expiry date."""
+
+    for candidate in option_expiry_candidates(contract, today=today):
+        if candidate["expiry_date"] == expiry_date:
+            return candidate["option_month"]
+
+    return None
 
 
 def approx_option_expiry_days(contract, today=None):

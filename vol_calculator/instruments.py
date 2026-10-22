@@ -56,7 +56,8 @@ class AmericanOption:
         expiry_days,
         option_type,
         volatility,
-        contract=None
+        contract=None,
+        option_month=None,
     ):
         self.quantity = quantity
         self.strike = strike
@@ -64,6 +65,7 @@ class AmericanOption:
         self.option_type = option_type
         self.volatility = volatility
         self.contract = contract
+        self.option_month = option_month
 
     def price(self, market):
 
@@ -85,7 +87,8 @@ class AmericanOption:
             expiry_days=self.expiry_days,
             option_type=self.option_type,
             volatility=self.volatility + dv,
-            contract=self.contract
+            contract=self.contract,
+            option_month=self.option_month,
         )
 
     def shift_time(self, days):
@@ -95,7 +98,8 @@ class AmericanOption:
             expiry_days=max(self.expiry_days - days, 1),
             option_type=self.option_type,
             volatility=self.volatility,
-            contract=self.contract
+            contract=self.contract,
+            option_month=self.option_month,
         )
 
     def __repr__(self):

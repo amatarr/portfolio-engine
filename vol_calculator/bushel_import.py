@@ -6,7 +6,7 @@ from datetime import date, datetime
 import pandas as pd
 
 from vol_calculator.instruments import Future, AmericanOption
-from vol_calculator.contracts import contract_code
+from vol_calculator.contracts import contract_code, option_month_for_expiry
 
 _DAILY_PROP_FILENAME = re.compile(r"Daily_Prop_Bod_Detail_(\d{4})_(\d{2})_(\d{2})\.csv$")
 
@@ -160,6 +160,7 @@ def import_bushel_positions(path, as_of=None):
             maturity_raw = str(row.iloc[_COLUMNS["maturity"]]).strip().split(".")[0]
             maturity = datetime.strptime(maturity_raw, "%Y%m%d").date()
             expiry_days = max((maturity - today).days, 1)
+            option_month = option_month_for_expiry(contract, maturity, today=today)
 
             volatility = (vol_pct or 0.0) / 100
 
@@ -170,6 +171,7 @@ def import_bushel_positions(path, as_of=None):
                 option_type="call" if contract_type == "C" else "put",
                 volatility=volatility,
                 contract=contract,
+                option_month=option_month,
             )
             meta = {
                 "commodity": commodity, "contract": contract,

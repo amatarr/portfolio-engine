@@ -14,6 +14,7 @@ _FIELDS = [
     "option_type",
     "volatility",
     "contract",
+    "option_month",
 ]
 
 
@@ -56,6 +57,7 @@ def _leg_to_row(leg, structure_id, structure_type):
             "option_type": "",
             "volatility": "",
             "contract": leg.contract or "",
+            "option_month": "",
         }
 
     if isinstance(leg, AmericanOption):
@@ -69,6 +71,7 @@ def _leg_to_row(leg, structure_id, structure_type):
             "option_type": leg.option_type,
             "volatility": leg.volatility,
             "contract": leg.contract or "",
+            "option_month": leg.option_month or "",
         }
 
     raise TypeError(f"Unsupported leg type for CSV export: {type(leg)}")
@@ -120,7 +123,8 @@ def _row_to_leg(row):
             expiry_days=int(float(row["expiry_days"])),
             option_type=row["option_type"],
             volatility=float(row["volatility"]),
-            contract=contract
+            contract=contract,
+            option_month=row.get("option_month") or None,
         )
 
     raise ValueError(f"Unknown instrument_type: {row['instrument_type']}")

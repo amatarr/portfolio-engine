@@ -509,10 +509,9 @@ def _render_quotes_box():
                     st.caption("-")
                     continue
 
-                # One small editable table per commodity: it sizes its
-                # columns to fit, so codes don't wrap and prices aren't cut
-                # off in a narrow column the way per-row inputs were. ATM
-                # IV has no data source yet -- an empty, read-only column.
+                # One compact editable table per commodity. Keep it within
+                # its column and size it to show every contract row without
+                # an internal scrollbar. ATM IV has no data source yet.
                 prices = [float(_price_for(code)) for code in codes]
                 quotes_df = pd.DataFrame({"Contract": codes, "Price": prices, "ATM IV": [None] * len(codes)})
 
@@ -525,7 +524,7 @@ def _render_quotes_box():
                     quotes_df,
                     hide_index=True,
                     width="stretch",
-                    height=row_height * (len(codes) + 1) + 3,
+                    height=row_height * len(codes) + 42,
                     row_height=row_height,
                     disabled=["Contract", "ATM IV"],
                     key=f"quotes_editor_{comm}_{price_signature}",
@@ -689,6 +688,7 @@ with st.container(border=True):
         # updates the Expiry (d) field's default below, same reasoning
         # as Contract already being outside the form.
         chosen_expiry_days = None
+        expiry_candidates = []
         if not is_future and current_contract and "expiry_days" in spec["defaults"]:
             expiry_candidates = option_expiry_candidates(current_contract)
             if expiry_candidates:
@@ -770,6 +770,14 @@ with st.container(border=True):
 
                     kwargs["contract"] = current_contract
                     instrument = spec["build"](**kwargs)
+                    option_month_by_days = {
+                        candidate["days"]: candidate["option_month"]
+                        for candidate in expiry_candidates
+                    }
+                    option_legs = instrument.legs if isinstance(instrument, Structure) else [instrument]
+                    for option_leg in option_legs:
+                        if isinstance(option_leg, AmericanOption):
+                            option_leg.option_month = option_month_by_days.get(option_leg.expiry_days)
                     st.session_state.portfolio.add(instrument)
                     st.session_state.position_meta.append({
                         "commodity": _commodity_from_contract(current_contract),
@@ -891,7 +899,7 @@ with st.container(border=True):
             selection = st.dataframe(
                 table,
                 hide_index=True,
-                width="stretch",
+                width="content",
                 height=min(38 * (len(table) + 1), 400),
                 column_order=[
                     "Contract", "Entry Price", "Underlying Price", "Mark to Market",
@@ -947,7 +955,20 @@ def _contract_selector(key):
         st.info("No contract found in the current positions.")
         return None
 
-    return st.selectbox("Future Spot", available, key=key)
+    commodity_order = {commodity: index for index, commodity in enumerate(COMMODITIES)}
+    available.sort(
+        key=lambda contract: (
+            commodity_order.get(_commodity_from_contract(contract), len(commodity_order)),
+            _commodity_from_contract(contract),
+            contract,
+        )
+    )
+    labels = {
+        contract: f"{_commodity_from_contract(contract)}: {contract}"
+        for contract in available
+    }
+
+    return st.selectbox("Future Spot", available, format_func=labels.get, key=key)
 
 
 def _tab_help(text, formulas=None):
@@ -1008,7 +1029,8 @@ with tabs[0]:
         "- **Theta**: $k lost per day from time passing.\n"
         "- **Rho**: $k gained/lost per 1% change in interest rates.\n\n"
         "Shown in $k using the contract multiplier (Delta/Gamma stay in contracts/cents). "
-        "*By Tenor* splits the same Greeks by expiry, same $k scale.\n\n"
+        "*By Tenor* groups futures with their underlying contract, followed by that contract's "
+        "option expiries, on the same $k scale.\n\n"
         "The formulas below are the European Black-76 definitions the model is built on. The tool prices "
         "American options with the Barone-Adesi-Whaley approximation and computes every Greek by bumping "
         "the input and repricing, so the numbers approximate these rather than evaluating them directly.",
@@ -1034,52 +1056,119 @@ with tabs[0]:
                 for k, v in dollars.items()
             }
 
-            st.write("$k view")
-            st.table(pd.Series(formatted, name="Value").to_frame())
+            summary_col, tenor_col = st.columns([1.4, 3.6], gap="small")
+            with summary_col:
+                st.write("$k view")
+                summary_df = pd.Series(formatted, name="Value").rename_axis("Greek").reset_index()
+                st.dataframe(
+                    summary_df,
+                    hide_index=True,
+                    width="stretch",
+                    height=39 + 32 * len(summary_df),
+                    row_height=32,
+                )
 
-            st.subheader("By Tenor")
-            tenor_df = report_by_tenor(portfolio, market, fs_contract)
-            tenor_df = tenor_df.apply(
-                lambda col: col.map(lambda v: f"{v:.3f}" if col.name == "Value ($k)" else f"{v:.2f}")
-            )
-            st.dataframe(tenor_df)
+            available_commodities = [
+                commodity for commodity in COMMODITIES
+                if any(meta.get("commodity") == commodity for meta in st.session_state.position_meta)
+            ]
+            with tenor_col:
+                st.subheader("By Tenor")
+                tenor_commodity = st.selectbox(
+                    "Commodity",
+                    ["All commodities", *available_commodities],
+                    key="tenor_commodity",
+                )
+                selected_commodity = None if tenor_commodity == "All commodities" else tenor_commodity
+                tenor_df = report_by_tenor(
+                    portfolio, market, fs_contract, commodity=selected_commodity
+                )
+                tenor_df = tenor_df.apply(
+                    lambda col: col.map(
+                        lambda v: f"{v:.3f}" if col.name == "Value ($k)" else f"{v:.2f}"
+                    )
+                )
+                if selected_commodity:
+                    st.caption(
+                        "Total aggregates each contract's Greeks for parallel price and volatility moves "
+                        f"across {selected_commodity}."
+                    )
+                else:
+                    st.caption(
+                        f"All positions; Delta, Gamma, and Vega are measured against {fs_contract}."
+                    )
+                st.dataframe(
+                    tenor_df,
+                    width="stretch",
+                    height=39 + 32 * len(tenor_df),
+                    row_height=32,
+                    column_config={
+                        "Delta (contracts)": st.column_config.TextColumn(
+                            "Delta", help="Delta (contracts)"
+                        ),
+                        "Gamma (ΔDelta contracts/1¢/bu)": st.column_config.TextColumn(
+                            "Gamma", help="Gamma (ΔDelta contracts/1¢/bu)"
+                        ),
+                        "Vega ($k/1% vol move)": st.column_config.TextColumn(
+                            "Vega", help="Vega ($k/1% vol move)"
+                        ),
+                        "Theta ($k/1 day decay)": st.column_config.TextColumn(
+                            "Theta", help="Theta ($k/1 day decay)"
+                        ),
+                        "Rho ($k/1% rate move)": st.column_config.TextColumn(
+                            "Rho", help="Rho ($k/1% rate move)"
+                        ),
+                        "Volga (ΔVega/1 vol pt)": st.column_config.TextColumn(
+                            "Volga", help="Volga (ΔVega/1 vol pt)"
+                        ),
+                        "Vanna-D (ΔDelta/1 vol pt)": st.column_config.TextColumn(
+                            "Vanna-D", help="Vanna-D (ΔDelta/1 vol pt)"
+                        ),
+                        "Vanna-V ($k Vega/1¢)": st.column_config.TextColumn(
+                            "Vanna-V", help="Vanna-V ($k Vega/1¢)"
+                        ),
+                    },
+                )
             _download_df_button(tenor_df, "Download tenor report CSV", "report_by_tenor.csv")
 
 with tabs[1]:
 
-    st.subheader("Spot Ladder")
+    st.subheader("Spot and Vol Ladders")
     _tab_help(
         "Recomputes the portfolio's P&L and Greeks across a range of futures prices (Spot Ladder) and "
         "vol levels (Vol Ladder), so you can see how risk changes before the market actually moves."
     )
 
     fs_contract = _contract_selector("fs_ladders") if has_positions else None
+    spot_col, vol_col = st.columns(2, gap="small")
 
-    c1, c2, c3 = st.columns(3)
-    spot_low = c1.number_input("Low (¢)", value=-50, step=5, key="spot_low")
-    spot_high = c2.number_input("High (¢)", value=50, step=5, key="spot_high")
-    spot_step = c3.number_input("Step (¢)", value=10, step=5, key="spot_step")
+    with spot_col:
+        st.markdown("**Spot Ladder**")
+        spot_inputs = st.columns(3, gap="small")
+        spot_low = spot_inputs[0].number_input("Low (¢)", value=-50, step=5, key="spot_low")
+        spot_high = spot_inputs[1].number_input("High (¢)", value=50, step=5, key="spot_high")
+        spot_step = spot_inputs[2].number_input("Step (¢)", value=10, step=5, key="spot_step")
 
-    if fs_contract:
-        ladder = spot_ladder(
-            portfolio, market, contract=fs_contract, low=spot_low, high=spot_high, step=spot_step
-        ).round(3)
-        st.dataframe(ladder)
-        _download_df_button(ladder, "Download spot ladder CSV", "spot_ladder.csv")
+        if fs_contract:
+            ladder = spot_ladder(
+                portfolio, market, contract=fs_contract, low=spot_low, high=spot_high, step=spot_step
+            ).round(3)
+            st.dataframe(ladder, width="content")
+            _download_df_button(ladder, "Download spot ladder CSV", "spot_ladder.csv")
 
-    st.subheader("Vol Ladder")
+    with vol_col:
+        st.markdown("**Vol Ladder**")
+        vol_inputs = st.columns(3, gap="small")
+        vol_low = vol_inputs[0].number_input("Low (pts)", value=-10, step=1, key="vol_low")
+        vol_high = vol_inputs[1].number_input("High (pts)", value=10, step=1, key="vol_high")
+        vol_step = vol_inputs[2].number_input("Step (pts)", value=2, step=1, key="vol_step")
 
-    c4, c5, c6 = st.columns(3)
-    vol_low = c4.number_input("Low (pts)", value=-10, step=1, key="vol_low")
-    vol_high = c5.number_input("High (pts)", value=10, step=1, key="vol_high")
-    vol_step = c6.number_input("Step (pts)", value=2, step=1, key="vol_step")
-
-    if fs_contract:
-        vladder = vol_ladder(
-            portfolio, market, contract=fs_contract, low=vol_low, high=vol_high, step=vol_step
-        ).round(3)
-        st.dataframe(vladder)
-        _download_df_button(vladder, "Download vol ladder CSV", "vol_ladder.csv")
+        if fs_contract:
+            vladder = vol_ladder(
+                portfolio, market, contract=fs_contract, low=vol_low, high=vol_high, step=vol_step
+            ).round(3)
+            st.dataframe(vladder, width="content")
+            _download_df_button(vladder, "Download vol ladder CSV", "vol_ladder.csv")
 
 with tabs[2]:
 
@@ -1089,16 +1178,18 @@ with tabs[2]:
         "so combined moves are visible at a glance."
     )
 
-    fs_contract = _contract_selector("fs_surface") if has_positions else None
-
-    metric = st.selectbox(
-        "Metric", ["PnL", "Delta", "Gamma", "Vega", "Volga", "Vanna-D", "Vanna-V"]
-    )
+    surface_controls, surface_chart = st.columns([1, 4], gap="small")
+    with surface_controls:
+        fs_contract = _contract_selector("fs_surface") if has_positions else None
+        metric = st.selectbox(
+            "Metric", ["PnL", "Delta", "Gamma", "Vega", "Volga", "Vanna-D", "Vanna-V"]
+        )
 
     if fs_contract:
-        plot_surface(portfolio, market, contract=fs_contract, metric=metric)
-        st.pyplot(plt.gcf())
-        plt.close()
+        with surface_chart:
+            plot_surface(portfolio, market, contract=fs_contract, metric=metric)
+            st.pyplot(plt.gcf(), use_container_width=False)
+            plt.close()
 
 with tabs[3]:
 
@@ -1126,34 +1217,40 @@ with tabs[4]:
         "risk sits. Structures are split into their legs and futures are excluded."
     )
 
-    weight = st.radio("Weight", ["quantity", "delta"], horizontal=True)
+    strike_controls, strike_chart = st.columns([1, 4], gap="small")
+    with strike_controls:
+        weight = st.radio("Weight", ["quantity", "delta"], horizontal=True)
 
     if has_positions:
         grid = strike_map(portfolio, market=market if weight == "delta" else None, weight=weight)
         if grid.empty:
             st.info("No option legs yet -- Strike Map excludes futures, which have no strike.")
         else:
-            plot_strike_map(portfolio, market=market if weight == "delta" else None, weight=weight)
-            st.pyplot(plt.gcf())
-            plt.close()
+            with strike_chart:
+                plot_strike_map(portfolio, market=market if weight == "delta" else None, weight=weight)
+                st.pyplot(plt.gcf(), use_container_width=False)
+                plt.close()
 
 with tabs[5]:
 
     st.subheader("Payoff Diagram")
     _tab_help(
-        "Profit/loss against the futures price, at chosen days forward. A time step of 0 is today; "
-        "larger steps show the position closer to expiry, keeping remaining time value."
+        "Profit/loss against the futures price, at chosen calendar days forward. A time step of 0 is today; "
+        "larger steps show the position closer to expiry, keeping remaining time value. Calendar days "
+        "are used, not trading days."
     )
 
-    fs_contract = _contract_selector("fs_payoff") if has_positions else None
-
-    time_steps_str = st.text_input("Time steps (days, comma-separated)", "0,30,64")
-    time_steps = [int(x.strip()) for x in time_steps_str.split(",") if x.strip()]
+    payoff_controls, payoff_chart = st.columns([1, 4], gap="small")
+    with payoff_controls:
+        fs_contract = _contract_selector("fs_payoff") if has_positions else None
+        time_steps_str = st.text_input("Time steps (calendar days, comma-separated)", "0,30,60")
+        time_steps = [int(x.strip()) for x in time_steps_str.split(",") if x.strip()]
 
     if fs_contract and time_steps:
-        plot_payoff(portfolio, market, time_steps=time_steps, contract=fs_contract)
-        st.pyplot(plt.gcf())
-        plt.close()
+        with payoff_chart:
+            plot_payoff(portfolio, market, time_steps=time_steps, contract=fs_contract)
+            st.pyplot(plt.gcf(), use_container_width=False)
+            plt.close()
 
 with tabs[6]:
 
