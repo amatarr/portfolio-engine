@@ -132,9 +132,10 @@ def option_expiry_candidates(contract, today=None):
     match what's actually tradeable yet, same as any other Add Leg
     default.
 
-    Returns a list of {"label", "expiry_date", "days"} dicts, nearest
-    first, or [] if the contract doesn't parse or every candidate has
-    already expired. "days" is calendar days from today to expiry.
+    Returns a list of {"label", "option_month", "expiry_date", "days"}
+    dicts, nearest first, or [] if the contract doesn't parse or every
+    candidate has already expired. "days" is calendar days from today to
+    expiry.
     """
 
     today = today or date.today()

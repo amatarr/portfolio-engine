@@ -456,7 +456,7 @@ def _option_month_for_bucket(bucket, contract, expiry):
     if contract:
         for candidate in option_expiry_candidates(contract):
             if candidate["days"] == expiry:
-                return candidate["option_month"]
+                return candidate.get("option_month")
 
     return None
 

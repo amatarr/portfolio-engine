@@ -771,7 +771,7 @@ with st.container(border=True):
                     kwargs["contract"] = current_contract
                     instrument = spec["build"](**kwargs)
                     option_month_by_days = {
-                        candidate["days"]: candidate["option_month"]
+                        candidate["days"]: candidate.get("option_month")
                         for candidate in expiry_candidates
                     }
                     option_legs = instrument.legs if isinstance(instrument, Structure) else [instrument]
