@@ -1184,7 +1184,7 @@ with tabs[1]:
             ladder = spot_ladder(
                 portfolio, market, contract=fs_contract, low=spot_low, high=spot_high, step=spot_step
             ).round(3)
-            st.dataframe(ladder, width="content")
+            st.dataframe(ladder, hide_index=True, width="content")
             _download_df_button(ladder, "Download spot ladder CSV", "spot_ladder.csv")
 
     with vol_col:
@@ -1198,7 +1198,7 @@ with tabs[1]:
             vladder = vol_ladder(
                 portfolio, market, contract=fs_contract, low=vol_low, high=vol_high, step=vol_step
             ).round(3)
-            st.dataframe(vladder, width="content")
+            st.dataframe(vladder, hide_index=True, width="content")
             _download_df_button(vladder, "Download vol ladder CSV", "vol_ladder.csv")
 
 with tabs[2]:

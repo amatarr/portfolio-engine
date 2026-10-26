@@ -30,7 +30,8 @@ a secrets file.
 The Market panel shows compact quote tables for the available commodities. Portfolio management
 actions (clear, upload, import, and download) are grouped under the collapsed **Manage Portfolio**
 section to keep the Add Leg form and position data visible. The Add Leg form labels the position size
-as **Quantity**.
+as **Quantity**. Spot and volatility ladder tables hide the row index for a cleaner display; CSV
+downloads retain their underlying ladder data.
 
 ## Project layout
 
