@@ -272,20 +272,28 @@ def _structure_kind(name):
     return re.sub(r"(?<!^)(?=[A-Z])", " ", kind)
 
 
-def _leg_row(leg, position_index, structure, contract, stored_price, market, future_vol_pct=None):
+def _leg_row(
+    leg, position_index, structure, contract, stored_price, market,
+    future_vol_pct=None, future_entry_price=None,
+):
     """
     stored_price is whatever meta["settlement_price"] holds -- for a
-    Future that IS its Underlying Price (there's no separate Entry
-    Price for a Future); for an Option it's the Entry Price (CSV
-    settlement, or a manual fill price typed in at Add Leg).
+    Future that is its Underlying Price; for an Option it's the Entry
+    Price. Futures track their Entry Price separately.
     """
 
     if isinstance(leg, Future):
+        try:
+            underlying_price = market.price_for(contract)
+        except (KeyError, ValueError):
+            underlying_price = stored_price
+
         return {
-            "#": position_index, "Contract": contract, "Entry Price": None,
+            "#": position_index, "Contract": contract,
+            "Entry Price": future_entry_price if future_entry_price is not None else stored_price,
             "Structure": structure, "Type": "Future",
             "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None, "Vol (%)": future_vol_pct,
-            "Underlying Price": stored_price, "Mark to Market": None,
+            "Underlying Price": underlying_price, "Mark to Market": None,
         }
 
     # Underlying Price/Mark to Market are always recomputed live from the
@@ -314,7 +322,7 @@ def _leg_row(leg, position_index, structure, contract, stored_price, market, fut
 
 
 def _positions_table_for_commodity(portfolio, meta, commodity, market):
-    """meta["settlement_price"] is whatever was captured at import/add time -- a fixed snapshot, not tied to the live feed. _leg_row routes it to Underlying Price (Future) or Entry Price (Option). Underlying Price/Mark to Market for options are recomputed live every render."""
+    """Routes settlement and entry prices to their corresponding position columns."""
 
     rows = []
 
@@ -325,12 +333,17 @@ def _positions_table_for_commodity(portfolio, meta, commodity, market):
 
         contract = meta[i].get("contract") or "-"
         stored_price = meta[i].get("settlement_price")
+        future_entry_price = meta[i].get("entry_price")
 
         if isinstance(pos, Structure):
             structure = _structure_kind(pos.name)
             rows.extend(_leg_row(leg, i, structure, contract, stored_price, market) for leg in pos.legs)
         else:
-            rows.append(_leg_row(pos, i, "-", contract, stored_price, market, future_vol_pct=meta[i].get("vol_pct")))
+            rows.append(_leg_row(
+                pos, i, "-", contract, stored_price, market,
+                future_vol_pct=meta[i].get("vol_pct"),
+                future_entry_price=future_entry_price,
+            ))
 
     return pd.DataFrame(rows)
 
@@ -359,7 +372,10 @@ def _autosave_portfolio():
     just the last-known state, overwritten on every change.
     """
     try:
-        portfolio_to_csv(st.session_state.portfolio, _AUTOSAVE_PATH)
+        portfolio_to_csv(
+            st.session_state.portfolio, _AUTOSAVE_PATH,
+            position_meta=st.session_state.position_meta,
+        )
     except Exception:
         pass
 
@@ -367,13 +383,18 @@ def _autosave_portfolio():
 def _load_autosaved_portfolio():
 
     try:
-        portfolio = portfolio_from_csv(_AUTOSAVE_PATH)
+        portfolio, saved_meta = portfolio_from_csv(_AUTOSAVE_PATH, return_meta=True)
     except FileNotFoundError:
         return _default_portfolio(), []
 
     meta = [
-        {"commodity": _commodity_from_contract(pos.contract), "contract": pos.contract, "vol_pct": None}
-        for pos in portfolio.positions
+        {
+            "commodity": _commodity_from_contract(pos.contract),
+            "contract": pos.contract,
+            "vol_pct": None,
+            **saved_meta[i],
+        }
+        for i, pos in enumerate(portfolio.positions)
     ]
     return portfolio, meta
 
@@ -704,7 +725,7 @@ with st.container(border=True):
 
         with st.form(f"add_{leg_type}"):
 
-            n_cols = len(spec["defaults"]) + (1 if underlying_price is not None else 0) + (0 if is_future else 1)
+            n_cols = len(spec["defaults"]) + (2 if underlying_price is not None else 0)
             field_cols = st.columns(n_cols)
 
             kwargs = {}
@@ -726,8 +747,6 @@ with st.container(border=True):
                     kwargs[field] = _render_field(col, field, default)
 
                 if field == "quantity" and underlying_price is not None:
-                    # A Future's own price is its Underlying -- there is no
-                    # separate Entry Price for a Future.
                     underlying_override = field_cols[col_idx].number_input(
                         "Underlying", value=float(underlying_price),
                         key=f"underlying_display_{current_contract}",
@@ -735,7 +754,13 @@ with st.container(border=True):
                     col_idx += 1
 
             entry_price_input = None
-            if not is_future and underlying_price is not None:
+            if is_future and underlying_price is not None:
+                entry_price_input = field_cols[col_idx].number_input(
+                    "Entry Price", value=float(underlying_price),
+                    key=f"future_entry_price_input_{current_contract}",
+                )
+                col_idx += 1
+            elif not is_future and underlying_price is not None:
                 # Entry Price only applies to options -- what you actually
                 # paid/received for the premium, a fixed number you type in
                 # and that never gets recalculated. Pre-filled with this
@@ -783,10 +808,8 @@ with st.container(border=True):
                         "commodity": _commodity_from_contract(current_contract),
                         "contract": current_contract,
                         "vol_pct": None,
-                        # Futures have no Entry Price -- their price lives
-                        # under Underlying Price instead (same value the
-                        # Underlying field above just set).
                         "settlement_price": underlying_override if is_future else entry_price_input,
+                        "entry_price": entry_price_input if is_future else None,
                     })
                     _autosave_portfolio()
                     st.success(f"Added {leg_type}")
@@ -816,14 +839,17 @@ with st.container(border=True):
                         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
                             tmp.write(uploaded.getvalue())
                             tmp_path = tmp.name
-                        st.session_state.portfolio = portfolio_from_csv(tmp_path)
+                        st.session_state.portfolio, saved_meta = portfolio_from_csv(
+                            tmp_path, return_meta=True,
+                        )
                         st.session_state.position_meta = [
                             {
                                 "commodity": _commodity_from_contract(pos.contract),
                                 "contract": pos.contract,
                                 "vol_pct": None,
+                                **saved_meta[i],
                             }
-                            for pos in st.session_state.portfolio.positions
+                            for i, pos in enumerate(st.session_state.portfolio.positions)
                         ]
                         _autosave_portfolio()
                         st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
@@ -833,7 +859,10 @@ with st.container(border=True):
                 with st.container(key="file_btn_download"):
                     if st.session_state.portfolio.positions:
                         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                            portfolio_to_csv(st.session_state.portfolio, tmp.name)
+                            portfolio_to_csv(
+                                st.session_state.portfolio, tmp.name,
+                                position_meta=st.session_state.position_meta,
+                            )
                             with open(tmp.name, "rb") as f:
                                 csv_bytes = f.read()
                         st.download_button(
