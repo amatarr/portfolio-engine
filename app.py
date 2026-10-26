@@ -75,7 +75,8 @@ st.markdown(
         background-color: #fff9c4; border-radius: 8px; padding: 0.5rem 0.75rem;
     }
     .st-key-cqg_quotes_box {
-        background-color: #cfe8fc; border-radius: 8px; padding: 0.5rem 0.75rem;
+        background-color: #cfe8fc; border-radius: 8px; padding: 0.35rem 0.5rem;
+        width: fit-content; max-width: 100%;
     }
     </style>
     """,
@@ -238,6 +239,7 @@ LEG_BUILDERS = {
 
 
 def _render_field(container, name, default):
+    label = "Quantity" if name == "quantity" else name
 
     if name == "option_type":
         options = ["call", "put"]
@@ -252,7 +254,7 @@ def _render_field(container, name, default):
         )
         return pct / 100
 
-    return container.number_input(name, value=float(default), step=1.0)
+    return container.number_input(label, value=float(default), step=1.0)
 
 
 def _leg_label(pos):
@@ -511,7 +513,7 @@ def _render_quotes_box():
             except ValueError:
                 st.caption(f"Last updated: {latest}")
 
-        comm_cols = st.columns(len(contracts_by_commodity))
+        comm_cols = st.columns(len(contracts_by_commodity), gap="small")
 
         def _price_for(code):
             # This box always shows the live feed, regardless of whether
@@ -540,19 +542,19 @@ def _render_quotes_box():
                 # created -- folding the prices into the key makes a live
                 # tick show up instead of the first value sticking.
                 price_signature = "_".join(f"{p:.4f}" for p in prices)
-                row_height = 32
+                row_height = 22
                 edited_df = st.data_editor(
                     quotes_df,
                     hide_index=True,
-                    width="stretch",
+                    width=230,
                     height=row_height * len(codes) + 42,
                     row_height=row_height,
                     disabled=["Contract", "ATM IV"],
                     key=f"quotes_editor_{comm}_{price_signature}",
                     column_config={
-                        "Contract": st.column_config.TextColumn("Contract", width="small"),
-                        "Price": st.column_config.NumberColumn("Price", format="%.2f", step=0.25, width="small"),
-                        "ATM IV": st.column_config.NumberColumn("ATM IV", format="%.2f", width="small"),
+                        "Contract": st.column_config.TextColumn("Contract", width=72),
+                        "Price": st.column_config.NumberColumn("Price", format="%.2f", step=0.25, width=72),
+                        "ATM IV": st.column_config.NumberColumn("ATM IV", format="%.2f", width=64),
                     },
                 )
 
@@ -816,99 +818,99 @@ with st.container(border=True):
                 except Exception as e:
                     st.error(str(e))
 
-        st.subheader("Manage")
+        with st.expander("Manage Portfolio", expanded=False):
 
-        mc_manage, mc_import = st.columns([1.6, 1.4])
+            mc_manage, mc_import = st.columns([1.6, 1.4])
 
-        with mc_manage:
-            with st.container(key="clear_btn"):
-                if st.button("Clear Portfolio"):
-                    st.session_state.portfolio = Portfolio()
-                    st.session_state.position_meta = []
-                    st.session_state.csv_locked_contracts = set()
-                    _autosave_portfolio()
-                    st.rerun()
-
-            uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
-
-            mc_load, mc_download = st.columns(2)
-
-            with mc_load:
-                with st.container(key="file_btn_load"):
-                    if uploaded is not None and st.button("Load uploaded CSV"):
-                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                            tmp.write(uploaded.getvalue())
-                            tmp_path = tmp.name
-                        st.session_state.portfolio, saved_meta = portfolio_from_csv(
-                            tmp_path, return_meta=True,
-                        )
-                        st.session_state.position_meta = [
-                            {
-                                "commodity": _commodity_from_contract(pos.contract),
-                                "contract": pos.contract,
-                                "vol_pct": None,
-                                **saved_meta[i],
-                            }
-                            for i, pos in enumerate(st.session_state.portfolio.positions)
-                        ]
+            with mc_manage:
+                with st.container(key="clear_btn"):
+                    if st.button("Clear Portfolio"):
+                        st.session_state.portfolio = Portfolio()
+                        st.session_state.position_meta = []
+                        st.session_state.csv_locked_contracts = set()
                         _autosave_portfolio()
-                        st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
                         st.rerun()
 
-            with mc_download:
-                with st.container(key="file_btn_download"):
-                    if st.session_state.portfolio.positions:
-                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                            portfolio_to_csv(
-                                st.session_state.portfolio, tmp.name,
-                                position_meta=st.session_state.position_meta,
+                uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
+
+                mc_load, mc_download = st.columns(2)
+
+                with mc_load:
+                    with st.container(key="file_btn_load"):
+                        if uploaded is not None and st.button("Load uploaded CSV"):
+                            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                                tmp.write(uploaded.getvalue())
+                                tmp_path = tmp.name
+                            st.session_state.portfolio, saved_meta = portfolio_from_csv(
+                                tmp_path, return_meta=True,
                             )
-                            with open(tmp.name, "rb") as f:
-                                csv_bytes = f.read()
-                        st.download_button(
-                            "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
-                        )
-
-        with mc_import:
-            with st.container(key="daily_prop_upload_box", border=True):
-
-                st.markdown("**Daily_Prop_upload**")
-                st.caption("Bushel export -- adds to current positions.")
-
-                imported_file = st.file_uploader(
-                    "Upload positions file", type="csv", key="bushel_uploader", label_visibility="collapsed"
-                )
-
-                with st.container(key="file_btn_import"):
-                    if imported_file is not None and st.button("Add Imported Positions"):
-                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                            tmp.write(imported_file.getvalue())
-                            tmp_path = tmp.name
-                        try:
-                            # The saved tempfile's own name is random (not
-                            # the original "Daily_Prop_Bod_Detail_*.csv"), so
-                            # the as-of date has to come from the file the
-                            # browser actually uploaded, or options get
-                            # priced with the wrong time-to-expiry.
-                            imported = import_bushel_positions(
-                                tmp_path, as_of=daily_prop_as_of_date(imported_file.name),
-                            )
-                            for instrument, meta in imported:
-                                st.session_state.portfolio.add(instrument)
-                                st.session_state.position_meta.append(meta)
-                                # Only a Future leg's settlement_price is the
-                                # underlying contract's own price -- an Option
-                                # leg's settlement_price is that option's own
-                                # premium, a completely different number, and
-                                # must never overwrite the underlying price.
-                                if isinstance(instrument, Future) and meta.get("settlement_price") is not None:
-                                    st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
-                                    st.session_state.csv_locked_contracts.add(meta["contract"])
+                            st.session_state.position_meta = [
+                                {
+                                    "commodity": _commodity_from_contract(pos.contract),
+                                    "contract": pos.contract,
+                                    "vol_pct": None,
+                                    **saved_meta[i],
+                                }
+                                for i, pos in enumerate(st.session_state.portfolio.positions)
+                            ]
                             _autosave_portfolio()
-                            st.success(f"Added {len(imported)} imported position(s)")
+                            st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
                             st.rerun()
-                        except Exception as e:
-                            st.error(f"Import failed: {e}")
+
+                with mc_download:
+                    with st.container(key="file_btn_download"):
+                        if st.session_state.portfolio.positions:
+                            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                                portfolio_to_csv(
+                                    st.session_state.portfolio, tmp.name,
+                                    position_meta=st.session_state.position_meta,
+                                )
+                                with open(tmp.name, "rb") as f:
+                                    csv_bytes = f.read()
+                            st.download_button(
+                                "Download portfolio CSV", data=csv_bytes, file_name="portfolio.csv", mime="text/csv"
+                            )
+
+            with mc_import:
+                with st.container(key="daily_prop_upload_box", border=True):
+
+                    st.markdown("**Daily_Prop_upload**")
+                    st.caption("Bushel export -- adds to current positions.")
+
+                    imported_file = st.file_uploader(
+                        "Upload positions file", type="csv", key="bushel_uploader", label_visibility="collapsed"
+                    )
+
+                    with st.container(key="file_btn_import"):
+                        if imported_file is not None and st.button("Add Imported Positions"):
+                            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                                tmp.write(imported_file.getvalue())
+                                tmp_path = tmp.name
+                            try:
+                                # The saved tempfile's own name is random (not
+                                # the original "Daily_Prop_Bod_Detail_*.csv"), so
+                                # the as-of date has to come from the file the
+                                # browser actually uploaded, or options get
+                                # priced with the wrong time-to-expiry.
+                                imported = import_bushel_positions(
+                                    tmp_path, as_of=daily_prop_as_of_date(imported_file.name),
+                                )
+                                for instrument, meta in imported:
+                                    st.session_state.portfolio.add(instrument)
+                                    st.session_state.position_meta.append(meta)
+                                    # Only a Future leg's settlement_price is the
+                                    # underlying contract's own price -- an Option
+                                    # leg's settlement_price is that option's own
+                                    # premium, a completely different number, and
+                                    # must never overwrite the underlying price.
+                                    if isinstance(instrument, Future) and meta.get("settlement_price") is not None:
+                                        st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
+                                        st.session_state.csv_locked_contracts.add(meta["contract"])
+                                _autosave_portfolio()
+                                st.success(f"Added {len(imported)} imported position(s)")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Import failed: {e}")
 
     st.divider()
     st.subheader("Current Positions")

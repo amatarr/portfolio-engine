@@ -25,6 +25,13 @@ app_password = "your-password-here"
 On Streamlit Community Cloud, set the same key under the app's Settings > Secrets instead of committing
 a secrets file.
 
+## Portfolio screen
+
+The Market panel shows compact quote tables for the available commodities. Portfolio management
+actions (clear, upload, import, and download) are grouped under the collapsed **Manage Portfolio**
+section to keep the Add Leg form and position data visible. The Add Leg form labels the position size
+as **Quantity**.
+
 ## Project layout
 
 - `vol_calculator/` -- the core package (pricing, Greeks, scenarios, structures, plotting, CSV I/O).
