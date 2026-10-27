@@ -145,7 +145,7 @@ class GreekEngine:
                 - 2 * mid_value
                 + down_value
             ) / (dv ** 2)
-        ) * VOL_POINT
+        ) * (VOL_POINT ** 2)
 
     @staticmethod
     def vanna_vega(portfolio, market, contract=None):
@@ -213,7 +213,7 @@ class GreekEngine:
 
             "Rho (ΔPnL/1% rate)": GreekEngine.rho(portfolio, market),
 
-            "Volga (ΔVega/1 vol pt)": GreekEngine.volga(portfolio, market, contract),
+            "Volga (value/vol pt²)": GreekEngine.volga(portfolio, market, contract),
 
             "Vanna-D (ΔDelta/1 vol pt)": GreekEngine.vanna_delta(portfolio, market, contract),
 
@@ -242,17 +242,19 @@ class GreekEngine:
 
             "Gamma (ΔDelta contracts/1¢/bu)": GreekEngine.gamma(portfolio, market, contract),
 
-            "Vega ($k/1% vol move)": GreekEngine.vega(portfolio, market, contract) * to_k,
+            "Vega ($K/1 vol pt)": GreekEngine.vega(portfolio, market, contract) * to_k,
 
-            "Theta ($k/1 day decay)": GreekEngine.theta(portfolio, market) * to_k,
+            "Theta ($K/1 day decay)": GreekEngine.theta(portfolio, market) * to_k,
 
-            "Rho ($k/1% rate move)": GreekEngine.rho(portfolio, market) * to_k,
+            "Rho ($K/1% rate move)": GreekEngine.rho(portfolio, market) * to_k,
 
-            "Volga (ΔVega/1 vol pt)": GreekEngine.volga(portfolio, market, contract),
+            "Volga ($K/1 vol pt²)": GreekEngine.volga(portfolio, market, contract) * to_k,
 
             "Vanna-D (ΔDelta/1 vol pt)": GreekEngine.vanna_delta(portfolio, market, contract),
 
             # Same cross-derivative as Vanna-D, but Vega is money: converted to
-            # $k like the Vega row (x multiplier/1000 = x0.05 for 5,000 bu).
-            "Vanna-V ($k Vega/1¢)": GreekEngine.vanna_vega(portfolio, market, contract) * to_k
+            # $K like the Vega row (x multiplier/1000 = x0.05 for 5,000 bu).
+            "Vanna-V (change in Vega [$K/vol pt] per 1¢)": (
+                GreekEngine.vanna_vega(portfolio, market, contract) * to_k
+            )
         }

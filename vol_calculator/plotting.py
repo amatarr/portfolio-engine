@@ -11,6 +11,15 @@ from vol_calculator.scenarios import (
 )
 
 
+_MONETARY_GREEK_UNITS = {
+    "PnL": "$K",
+    "Vega": "$K / vol pt",
+    "Volga": "$K / vol pt²",
+    "Vanna-V": "$K / (vol pt·¢)",
+    "Theta": "$K / day",
+}
+
+
 def plot_surface(
     portfolio,
     market,
@@ -24,6 +33,10 @@ def plot_surface(
         contract=contract,
         metric=metric
     )
+    unit = _MONETARY_GREEK_UNITS.get(metric)
+    if unit:
+        surface = surface * (market.contract_multiplier / 1000)
+    unit_suffix = f" ({unit})" if unit else ""
 
     plt.figure(figsize=(8, 5))
 
@@ -34,10 +47,12 @@ def plot_surface(
         cmap="RdYlGn" if metric == "PnL" else "coolwarm",
         center=0,
         annot_kws={"size": 8},
+        cbar_kws={"label": unit} if unit else None,
     )
 
     plt.title(
-        f"{metric} Heatmap\nFuture Spot Move (¢) vs Vol Shift (pts) -- {contract or 'single contract'}"
+        f"{metric}{unit_suffix} Heatmap\n"
+        f"Future Spot Move (¢) vs Vol Shift (pts) -- {contract or 'single contract'}"
     )
 
     plt.xlabel("Vol Shift (pts)")
@@ -73,6 +88,9 @@ def plot_strike_map(portfolio, market=None, weight="quantity"):
 def plot_stress(portfolio, market, greek, axis, magnitudes, contract=None):
 
     table = stress_table(portfolio, market, greek, axis, magnitudes, contract)
+    unit = _MONETARY_GREEK_UNITS.get(greek.capitalize())
+    if unit:
+        table[greek.capitalize()] *= market.contract_multiplier / 1000
 
     plt.figure(figsize=(8, 5))
 
@@ -81,7 +99,7 @@ def plot_stress(portfolio, market, greek, axis, magnitudes, contract=None):
 
     plt.title(f"{greek.capitalize()} vs {axis.capitalize()}")
     plt.xlabel(table.index.name)
-    plt.ylabel(greek.capitalize())
+    plt.ylabel(f"{greek.capitalize()} ({unit})" if unit else greek.capitalize())
     plt.grid(alpha=0.3)
 
     plt.show()
@@ -117,12 +135,16 @@ def plot_stress_report(
 
         table = report[key]
         greek_col = table.columns[0]
+        unit = _MONETARY_GREEK_UNITS.get(greek_col)
+        if unit:
+            table = table.copy()
+            table[greek_col] *= market.contract_multiplier / 1000
 
         ax.plot(table.index, table[greek_col], marker="o")
         ax.axhline(0, color="grey", linewidth=0.8)
         ax.set_title(key.replace("_", " vs ").capitalize())
         ax.set_xlabel(table.index.name)
-        ax.set_ylabel(greek_col)
+        ax.set_ylabel(f"{greek_col} ({unit})" if unit else greek_col)
         ax.grid(alpha=0.3)
 
     for ax in axes[n:]:
@@ -152,6 +174,9 @@ def plot_payoff(
         high=high,
         step=step
     )
+    money_factor = market.contract_multiplier / 1000
+    payoff_columns = [f"T+{days}d" for days in time_steps]
+    diagram[payoff_columns] *= money_factor
 
     plt.figure(figsize=(8, 5))
 
@@ -173,6 +198,7 @@ def plot_payoff(
             high=high,
             step=step
         )
+        expiry["PnL"] *= money_factor
 
         plt.plot(
             expiry["Futures Price"],
@@ -188,7 +214,7 @@ def plot_payoff(
 
     plt.title(f"Payoff Diagram -- {contract or 'single contract'}")
     plt.xlabel("Future Spot")
-    plt.ylabel("PnL")
+    plt.ylabel("PnL ($K)")
     plt.legend()
     plt.grid(alpha=0.3)
 

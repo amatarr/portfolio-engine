@@ -485,28 +485,28 @@ def _fmt_number(v, decimals=4):
     return str(v)
 
 
-# Ladder values are the engine's raw units: money is in cents/bu x contracts
-# (x $50 per contract for dollars), Delta in contracts.
+# Monetary ladder values are converted to $K for display and CSV export.
 PRICE_LADDER_LABELS = {
     "Futures Price": "Futures Price (¢/bu)",
-    "PnL": "PnL (¢/bu × contracts)",
-    "Portfolio Value": "Portfolio Value (¢/bu × contracts)",
+    "PnL": "PnL ($K)",
+    "Portfolio Value": "Portfolio Value ($K)",
     "Delta": "Delta (contracts)",
     "Gamma": "Gamma (ΔDelta/1¢)",
-    "Theta": "Theta (ΔPnL/1 day)",
-    "Rho": "Rho (ΔPnL/1% rate)",
-    "Vega": "Vega (ΔPnL/1 vol pt)",
-    "Vanna-V": "Vanna-V (ΔVega/1¢)",
+    "Theta": "Theta ($K/1 day)",
+    "Rho": "Rho ($K/1% rate)",
+    "Vega": "Vega ($K/1 vol pt)",
+    "Volga": "Volga ($K/1 vol pt²)",
+    "Vanna-V": "Vanna-V (change in Vega [$K/vol pt] per 1¢)",
 }
 VOL_LADDER_LABELS = {
     **{k: v for k, v in PRICE_LADDER_LABELS.items() if k not in ("Futures Price", "Vanna-V")},
-    "Volga": "Volga (ΔVega/1 vol pt)",
     "Vanna-D": "Vanna-D (ΔDelta/1 vol pt)",
 }
 
 
 DECAY_LADDER_LABELS = {
-    k: v for k, v in PRICE_LADDER_LABELS.items() if k not in ("Futures Price", "Vanna-V")
+    k: v for k, v in PRICE_LADDER_LABELS.items()
+    if k not in ("Futures Price", "Volga", "Vanna-V")
 }
 
 
@@ -521,6 +521,19 @@ def _transposed_ladder(ladder, move_col, labels, column_label):
     table.columns = [column_label(m) for m in table.columns]
     table.index.name = "Greek"
     return table
+
+
+def _ladder_money_in_thousands(ladder, market):
+    """Convert monetary ladder values and monetary Greeks from engine units to $K."""
+
+    scaled = ladder.copy()
+    money_fields = [
+        "PnL", "Portfolio Value", "Theta", "Rho", "Vega", "Volga", "Vanna-V",
+    ]
+    factor = market.contract_multiplier / 1000
+    available_money_fields = [field for field in money_fields if field in scaled.columns]
+    scaled[available_money_fields] = scaled[available_money_fields] * factor
+    return scaled
 
 
 def _prices_as_of_caption():
@@ -818,7 +831,7 @@ with st.expander("Quick start -- how to use this tool", expanded=False):
    (how risk changes if the market moves) -> *Payoff / Breakevens* (profit and loss shape).
    Each tab has a short *What is this?* box.
 
-Units: Delta and Gamma are in contracts; Vega, Theta, Rho and Value are in $k using the contract multiplier.
+Units: Delta and Gamma are in contracts; Vega, Theta, Rho and Value are in $K using the contract multiplier.
 Prices are futures cents per bushel; time is in calendar days.
         """
     )
@@ -1251,12 +1264,13 @@ with tabs[0]:
             "How the portfolio reacts to small market moves.\n\n"
             "- **Delta**: effective number of futures contracts you are long/short.\n"
             "- **Gamma**: change in Delta (contracts) per 1 cent/bu move.\n"
-            "- **Vega**: $k gained/lost per 1% change in vol.\n"
-            "- **Theta**: $k lost per day from time passing.\n"
-            "- **Rho**: $k gained/lost per 1% change in interest rates.\n\n"
-            "Shown in $k using the contract multiplier (Delta/Gamma stay in contracts/cents). "
-            "*By Tenor* groups futures with their underlying contract, followed by that contract's "
-            "option expiries, on the same $k scale.\n\n"
+            "- **Vega**: \\$K gained/lost per 1% change in vol.\n"
+            "- **Volga**: change in Vega (\\$K per vol point) per vol point.\n"
+            "- **Theta**: \\$K lost per day from time passing.\n"
+            "- **Rho**: \\$K gained/lost per 1% change in interest rates.\n\n"
+            "Monetary Greeks are shown in \\$K using the contract multiplier; Delta and Gamma remain "
+            "in contracts and contracts per cent, respectively. By Tenor groups futures with their "
+            "underlying contract, followed by that contract's option expiries, on the same \\$K scale.\n\n"
             "The formulas below are the European Black-76 definitions the model is built on. The tool prices "
             "American options with the Barone-Adesi-Whaley approximation and computes every Greek by bumping "
             "the input and repricing, so the numbers approximate these rather than evaluating them directly.",
@@ -1309,29 +1323,69 @@ with tabs[0]:
                     height=39 + 32 * len(tenor_df),
                     row_height=32,
                     column_config={
+                        "_index": st.column_config.TextColumn(
+                            "Tenor",
+                            help=(
+                                "Rows group futures by contract and options by underlying contract and expiry. "
+                                "Total aggregates the included positions. With All commodities, sensitivities "
+                                "to price and volatility are measured against the selected futures contract; "
+                                "with one commodity selected, each row uses its own underlying contract."
+                            ),
+                        ),
                         "Delta (contracts)": st.column_config.Column(
-                            "Delta", help="Delta (contracts)"
+                            "Delta (contracts)",
+                            help=(
+                                "Portfolio value sensitivity to a 1¢/bu price move, expressed as "
+                                "futures-equivalent contracts. Positive is long exposure; negative is short."
+                            ),
                         ),
                         "Gamma (ΔDelta contracts/1¢/bu)": st.column_config.Column(
-                            "Gamma", help="Gamma (ΔDelta contracts/1¢/bu)"
+                            "Gamma (ΔDelta contracts/1¢/bu)",
+                            help=(
+                                "Change in Delta, in futures-equivalent contracts, for a 1¢/bu "
+                                "futures price move."
+                            ),
                         ),
-                        "Vega ($k/1% vol move)": st.column_config.Column(
-                            "Vega", help="Vega ($k/1% vol move)"
+                        "Vega ($K/1 vol pt)": st.column_config.Column(
+                            "Vega ($K/1 vol pt)",
+                            help=(
+                                "Approximate change in portfolio value ($K) for a 1 vol point "
+                                "(1 percentage point) increase in volatility."
+                            ),
                         ),
-                        "Theta ($k/1 day decay)": st.column_config.Column(
-                            "Theta", help="Theta ($k/1 day decay)"
+                        "Theta ($K/1 day decay)": st.column_config.Column(
+                            "Theta ($K/1 day decay)",
+                            help=(
+                                "Approximate change in portfolio value ($K) as one day passes, "
+                                "with market inputs otherwise unchanged."
+                            ),
                         ),
-                        "Rho ($k/1% rate move)": st.column_config.Column(
-                            "Rho", help="Rho ($k/1% rate move)"
+                        "Rho ($K/1% rate move)": st.column_config.Column(
+                            "Rho ($K/1% rate move)",
+                            help=(
+                                "Approximate change in portfolio value ($K) for a 1 percentage "
+                                "point increase in the interest rate."
+                            ),
                         ),
-                        "Volga (ΔVega/1 vol pt)": st.column_config.Column(
-                            "Volga", help="Volga (ΔVega/1 vol pt)"
+                        "Volga ($K/1 vol pt²)": st.column_config.Column(
+                            "Volga ($K/1 vol pt²)",
+                            help=(
+                                "Change in Vega ($K per vol point) for each additional vol point; "
+                                "the second-order sensitivity to volatility."
+                            ),
                         ),
                         "Vanna-D (ΔDelta/1 vol pt)": st.column_config.Column(
-                            "Vanna-D", help="Vanna-D (ΔDelta/1 vol pt)"
+                            "Vanna-D (ΔDelta contracts/1 vol pt)",
+                            help=(
+                                "Change in Delta (futures-equivalent contracts) for a 1 vol point "
+                                "(1 percentage point) volatility increase."
+                            ),
                         ),
-                        "Vanna-V ($k Vega/1¢)": st.column_config.Column(
-                            "Vanna-V", help="Vanna-V ($k Vega/1¢)"
+                        "Vanna-V (change in Vega [$K/vol pt] per 1¢)": st.column_config.Column(
+                            "Vanna-V (change in Vega [$K/vol pt] per 1¢)",
+                            help=(
+                                "Change in Vega ($K per vol point) for each 1¢/bu futures price move."
+                            ),
                         ),
                     },
                 )
@@ -1344,7 +1398,7 @@ with tabs[1]:
         _tab_help(
             "Recomputes the portfolio's P&L and Greeks across a range of futures prices, so you can see how "
             "risk changes before the market actually moves. Each column is a move in the chosen contract's "
-            "price; money rows are in cents/bu x contracts (x $50 per contract for dollars)."
+            "price; PnL, portfolio value, and monetary Greeks are shown in $K using the contract multiplier."
         )
 
         fs_contract = _contract_selector("fs_price_ladder") if has_positions else None
@@ -1354,11 +1408,15 @@ with tabs[1]:
         spot_step = spot_inputs[2].number_input("Step (¢)", step=5, key="spot_step")
 
         if fs_contract:
-            ladder = _transposed_ladder(
+            ladder = _ladder_money_in_thousands(
                 spot_ladder(
                     portfolio, market, contract=fs_contract, low=spot_low, high=spot_high, step=spot_step,
                     with_theta_rho=True,
                 ),
+                market,
+            )
+            ladder = _transposed_ladder(
+                ladder,
                 "Spot Move (¢)", PRICE_LADDER_LABELS, _signed("¢"),
             )
             _show_ladder(ladder, PRICE_LADDER_LABELS["PnL"], PRICE_LADDER_LABELS["Futures Price"])
@@ -1370,8 +1428,8 @@ with tabs[2]:
         _prices_as_of_caption()
         _tab_help(
             "Recomputes the portfolio's P&L and Greeks across a range of vol levels on the chosen contract's "
-            "options. Each column is a vol shift in points; money rows are in cents/bu x contracts "
-            "(x $50 per contract for dollars)."
+            "options. Each column is a vol shift in points; PnL, portfolio value, and monetary Greeks "
+            "are shown in $K using the contract multiplier."
         )
 
         fs_contract = _contract_selector("fs_vol_ladder") if has_positions else None
@@ -1381,11 +1439,15 @@ with tabs[2]:
         vol_step = vol_inputs[2].number_input("Step (pts)", step=1, key="vol_step")
 
         if fs_contract:
-            vladder = _transposed_ladder(
+            vladder = _ladder_money_in_thousands(
                 vol_ladder(
                     portfolio, market, contract=fs_contract, low=vol_low, high=vol_high, step=vol_step,
                     with_theta_rho=True,
                 ),
+                market,
+            )
+            vladder = _transposed_ladder(
+                vladder,
                 "Vol Shift (pts)", VOL_LADDER_LABELS, _signed(" pts"),
             )
             _show_ladder(vladder, VOL_LADDER_LABELS["PnL"])
@@ -1399,8 +1461,7 @@ with tabs[3]:
             "Moves the whole book forward in calendar days with prices and vols held where they are, so you "
             "can see how P&L and Greeks change as options decay. An option that expires inside the horizon "
             "is exercised into futures if it is in the money at that point, and lapses worthless otherwise. "
-            "Money rows are in cents/bu x contracts "
-            "(x $50 per contract for dollars)."
+            "PnL, portfolio value, and monetary Greeks are shown in $K using the contract multiplier."
         )
 
         fs_contract = _contract_selector("fs_decay_ladder") if has_positions else None
@@ -1409,8 +1470,12 @@ with tabs[3]:
         decay_step = decay_inputs[1].number_input("Step (days)", min_value=1, step=1, key="decay_step")
 
         if fs_contract:
-            dladder = _transposed_ladder(
+            dladder = _ladder_money_in_thousands(
                 decay_ladder(portfolio, market, contract=fs_contract, horizon=decay_horizon, step=decay_step),
+                market,
+            )
+            dladder = _transposed_ladder(
+                dladder,
                 "Days Forward", DECAY_LADDER_LABELS, lambda d: f"{d}d",
             )
             _show_ladder(dladder, DECAY_LADDER_LABELS["PnL"])

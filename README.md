@@ -25,6 +25,20 @@ app_password = "your-password-here"
 On Streamlit Community Cloud, set the same key under the app's Settings > Secrets instead of committing
 a secrets file.
 
+Monetary values in the Greek summary, analysis ladders (including their CSV downloads), surface,
+stress charts, and payoff chart are displayed in thousands of dollars ($K), using the configured
+contract multiplier. The Tenor and ladder headers include each measure's units:
+
+- Delta is expressed as futures-equivalent contracts; Gamma is the change in Delta per 1¢/bu price move.
+- Vega is $K per 1 volatility point (1 percentage point); Volga is $K per volatility point squared.
+- Theta is $K per day; Rho is $K per 1 percentage point rate move.
+- Vanna-D is the change in Delta per volatility point; Vanna-V is the change in Vega ($K per
+  volatility point) per 1¢/bu price move.
+
+The Greek Summary by Tenor groups futures by underlying contract and options by underlying contract
+and expiry. Its column headers include units and provide tooltips explaining each sensitivity and how
+the selected commodity affects the calculation scope.
+
 ## Portfolio screen
 
 The Market panel shows compact quote tables for the available commodities. Portfolio management
