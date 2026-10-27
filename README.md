@@ -30,8 +30,11 @@ a secrets file.
 The Market panel shows compact quote tables for the available commodities. Portfolio management
 actions (clear, upload, import, and download) are grouped under the collapsed **Manage Portfolio**
 section to keep the Add Leg form and position data visible. The Add Leg form labels the position size
-as **Quantity**. Spot and volatility ladder tables hide the row index for a cleaner display; CSV
-downloads retain their underlying ladder data.
+as **Quantity**; its Underlying field is read-only (always the live price). Current Positions show
+short quantities in red and a First Notice column for futures (CBOT: last business day of the month
+before delivery). The Greek summary shows negatives in red. The **Price Ladder** and **Vol Ladder**
+each have their own tab, transposed (moves as columns, Greeks as rows with units), with PnL shaded
+green/red by size and negative Greeks in red.
 
 ## Project layout
 

@@ -24,15 +24,28 @@ def _bump_contract_price(market, contract, new_price):
     return bumped
 
 
+def _theta_rho(portfolio, market):
+
+    return {
+        "Theta": GreekEngine.theta(portfolio, market),
+        "Rho": GreekEngine.rho(portfolio, market),
+    }
+
+
 def spot_ladder(
     portfolio,
     market,
     contract=None,
     low=-50,
     high=50,
-    step=10
+    step=10,
+    with_theta_rho=False
 ):
-    """low/high/step are absolute cents moves on `contract`'s price, not percentages."""
+    """
+    low/high/step are absolute cents moves on `contract`'s price, not percentages.
+    with_theta_rho adds Theta and Rho (before Vega) at each price level; off by
+    default so the Excel ladder sheet keeps its columns.
+    """
 
     rows = []
 
@@ -53,6 +66,7 @@ def spot_ladder(
             "Portfolio Value": value,
             "Delta": GreekEngine.delta(portfolio, shocked_market, contract),
             "Gamma": GreekEngine.gamma(portfolio, shocked_market, contract),
+            **(_theta_rho(portfolio, shocked_market) if with_theta_rho else {}),
             "Vega": GreekEngine.vega(portfolio, shocked_market, contract),
             "Vanna-V": GreekEngine.vanna_vega(portfolio, shocked_market, contract),
             "Volga": GreekEngine.volga(portfolio, shocked_market, contract),
@@ -67,8 +81,10 @@ def vol_ladder(
     contract=None,
     low=-10,
     high=10,
-    step=2
+    step=2,
+    with_theta_rho=False
 ):
+    """with_theta_rho: same as spot_ladder's."""
 
     rows = []
 
@@ -86,6 +102,7 @@ def vol_ladder(
             "Portfolio Value": value,
             "Delta": GreekEngine.delta(shocked_portfolio, market, contract),
             "Gamma": GreekEngine.gamma(shocked_portfolio, market, contract),
+            **(_theta_rho(shocked_portfolio, market) if with_theta_rho else {}),
             "Vega": GreekEngine.vega(shocked_portfolio, market, contract),
             "Volga": GreekEngine.volga(shocked_portfolio, market, contract),
             "Vanna-D": GreekEngine.vanna_delta(shocked_portfolio, market, contract),

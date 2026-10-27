@@ -42,6 +42,7 @@ from vol_calculator import (
     compute_model_price,
     daily_prop_as_of_date,
     option_expiry_candidates,
+    first_notice_date,
 )
 
 st.set_page_config(page_title="Vol Calculator", layout="wide")
@@ -294,8 +295,9 @@ def _leg_row(
             "#": position_index, "Contract": contract,
             "Entry Price": future_entry_price if future_entry_price is not None else stored_price,
             "Structure": structure, "Type": "Future",
-            "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None, "Vol (%)": future_vol_pct,
-            "Underlying Price": underlying_price, "Mark to Market": None,
+            "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None,
+            "First Notice": first_notice_date(contract), "Vol (%)": future_vol_pct,
+            "Underlying Price": underlying_price, "Mark to Market": underlying_price,
         }
 
     # Underlying Price/Mark to Market are always recomputed live from the
@@ -318,7 +320,7 @@ def _leg_row(
         "Structure": structure,
         "Type": "Call" if leg.option_type == "call" else "Put",
         "Quantity": leg.quantity, "Strike": leg.strike,
-        "Expiry (d)": leg.expiry_days, "Vol (%)": leg.volatility * 100,
+        "Expiry (d)": leg.expiry_days, "First Notice": None, "Vol (%)": leg.volatility * 100,
         "Underlying Price": underlying_price, "Mark to Market": mark_to_market,
     }
 
@@ -415,6 +417,78 @@ def _commodity_from_contract(contract, fallback="Unknown"):
 
 def _download_df_button(df, label, filename):
     st.download_button(label, data=df.to_csv().encode("utf-8"), file_name=filename, mime="text/csv")
+
+
+def _red_if_negative(v):
+    return "color: #d32f2f" if pd.api.types.is_number(v) and v < 0 else ""
+
+
+def _pnl_shading(row):
+    """Green for profit, red for loss, deeper the further from zero (relative to the row's largest move)."""
+
+    scale = row.abs().max()
+    styles = []
+    for v in row:
+        if not scale or not v:
+            styles.append("")
+            continue
+        r, g, b = (46, 125, 50) if v > 0 else (211, 47, 47)
+        styles.append(f"background-color: rgba({r}, {g}, {b}, {0.12 + 0.5 * abs(v) / scale:.2f})")
+    return styles
+
+
+def _fmt_number(v, decimals=4):
+    """Up to `decimals` places, trailing zeros dropped; blanks read "None" like the unstyled tables did."""
+
+    if v is None or (pd.api.types.is_number(v) and pd.isna(v)):
+        return "None"
+    if pd.api.types.is_number(v):
+        return f"{v:.{decimals}f}".rstrip("0").rstrip(".")
+    return str(v)
+
+
+# Ladder values are the engine's raw units: money is in cents/bu x contracts
+# (x $50 per contract for dollars), Delta in contracts.
+PRICE_LADDER_LABELS = {
+    "Futures Price": "Futures Price (¢/bu)",
+    "PnL": "PnL (¢/bu × contracts)",
+    "Portfolio Value": "Portfolio Value (¢/bu × contracts)",
+    "Delta": "Delta (contracts)",
+    "Gamma": "Gamma (ΔDelta/1¢)",
+    "Theta": "Theta (ΔPnL/1 day)",
+    "Rho": "Rho (ΔPnL/1% rate)",
+    "Vega": "Vega (ΔPnL/1 vol pt)",
+    "Vanna-V": "Vanna-V (ΔVega/1¢)",
+}
+VOL_LADDER_LABELS = {
+    **{k: v for k, v in PRICE_LADDER_LABELS.items() if k not in ("Futures Price", "Vanna-V")},
+    "Volga": "Volga (ΔVega/1 vol pt)",
+    "Vanna-D": "Vanna-D (ΔDelta/1 vol pt)",
+}
+
+
+def _transposed_ladder(ladder, move_col, move_suffix, labels):
+    """Moves become the columns, Greeks the rows (labelled with their units), in `labels` order."""
+
+    table = ladder.set_index(move_col)[list(labels)].rename(columns=labels).T
+    table.columns = [f"{m:+g}{move_suffix}" if m else f"0{move_suffix}" for m in table.columns]
+    table.index.name = "Greek"
+    return table
+
+
+def _show_ladder(table, pnl_label, price_label=None):
+
+    other_rows = [r for r in table.index if r not in (pnl_label, price_label)]
+    styler = (
+        table.style
+        .format(lambda v: f"{v:.3f}")
+        .map(_red_if_negative, subset=pd.IndexSlice[other_rows, :])
+        .apply(_pnl_shading, axis=1, subset=pd.IndexSlice[[pnl_label], :])
+    )
+    if price_label:
+        styler = styler.format(lambda v: f"{v:.2f}", subset=pd.IndexSlice[[price_label], :])
+
+    st.dataframe(styler, width="content", height=36 * (len(table) + 1) + 3)
 
 
 def _format_last_updated(dt):
@@ -731,7 +805,6 @@ with st.container(border=True):
             field_cols = st.columns(n_cols)
 
             kwargs = {}
-            underlying_override = None
             col_idx = 0
             for field, default in spec["defaults"].items():
                 col = field_cols[col_idx]
@@ -749,9 +822,11 @@ with st.container(border=True):
                     kwargs[field] = _render_field(col, field, default)
 
                 if field == "quantity" and underlying_price is not None:
-                    underlying_override = field_cols[col_idx].number_input(
-                        "Underlying", value=float(underlying_price),
-                        key=f"underlying_display_{current_contract}",
+                    # Read-only: always the contract's live price. The price
+                    # is in the key so the field follows live quote updates.
+                    field_cols[col_idx].number_input(
+                        "Underlying", value=float(underlying_price), disabled=True,
+                        key=f"underlying_display_{current_contract}_{underlying_price}",
                     )
                     col_idx += 1
 
@@ -792,9 +867,6 @@ with st.container(border=True):
                 st.error("Pick a contract first.")
             else:
                 try:
-                    if underlying_override is not None and underlying_override != underlying_price:
-                        st.session_state.market.futures_prices[current_contract] = underlying_override
-
                     kwargs["contract"] = current_contract
                     instrument = spec["build"](**kwargs)
                     option_month_by_days = {
@@ -810,7 +882,7 @@ with st.container(border=True):
                         "commodity": _commodity_from_contract(current_contract),
                         "contract": current_contract,
                         "vol_pct": None,
-                        "settlement_price": underlying_override if is_future else entry_price_input,
+                        "settlement_price": underlying_price if is_future else entry_price_input,
                         "entry_price": entry_price_input if is_future else None,
                     })
                     _autosave_portfolio()
@@ -927,14 +999,20 @@ with st.container(border=True):
             table = _positions_table_for_commodity(
                 st.session_state.portfolio, meta, group_commodity, st.session_state.market,
             )
+            styled_table = (
+                table.style
+                .format(_fmt_number)
+                .format(lambda d: d.strftime("%Y-%m-%d") if d else "None", subset=["First Notice"])
+                .map(_red_if_negative, subset=["Quantity"])
+            )
             selection = st.dataframe(
-                table,
+                styled_table,
                 hide_index=True,
                 width="content",
                 height=min(38 * (len(table) + 1), 400),
                 column_order=[
-                    "Contract", "Entry Price", "Underlying Price", "Mark to Market",
-                    "Structure", "Type", "Quantity", "Strike", "Expiry (d)", "Vol (%)",
+                    "Contract", "Type", "Strike", "Quantity", "Entry Price", "Mark to Market",
+                    "Underlying Price", "Structure", "Expiry (d)", "First Notice", "Vol (%)",
                 ],
                 on_select="rerun",
                 selection_mode="multi-row",
@@ -1043,7 +1121,7 @@ if _unpriced:
         )
 
 tabs = st.tabs([
-    "Greeks", "Ladders", "Surface",
+    "Greeks", "Price Ladder", "Vol Ladder", "Surface",
     "Stress", "Strike Map", "Payoff", "Breakevens",
 ])
 
@@ -1082,17 +1160,16 @@ with tabs[0]:
         if fs_contract:
             dollars = GreekEngine.report_dollars(portfolio, market, fs_contract)
 
-            formatted = {
-                k: (f"{v:.3f}" if k == "Value ($k)" else f"{v:.2f}")
-                for k, v in dollars.items()
-            }
-
             summary_col, tenor_col = st.columns([1.4, 3.6], gap="small")
             with summary_col:
                 st.write("$k view")
-                summary_df = pd.Series(formatted, name="Value").rename_axis("Greek").reset_index()
+                summary_df = pd.Series(dollars, name="Value").rename_axis("Greek").reset_index()
+                value_rows = summary_df["Greek"] == "Value ($k)"
                 st.dataframe(
-                    summary_df,
+                    summary_df.style
+                    .format(lambda v: f"{v:.2f}", subset=pd.IndexSlice[~value_rows, "Value"])
+                    .format(lambda v: f"{v:.3f}", subset=pd.IndexSlice[value_rows, "Value"])
+                    .map(_red_if_negative, subset=["Value"]),
                     hide_index=True,
                     width="stretch",
                     height=39 + 32 * len(summary_df),
@@ -1114,11 +1191,6 @@ with tabs[0]:
                 tenor_df = report_by_tenor(
                     portfolio, market, fs_contract, commodity=selected_commodity
                 )
-                tenor_df = tenor_df.apply(
-                    lambda col: col.map(
-                        lambda v: f"{v:.3f}" if col.name == "Value ($k)" else f"{v:.2f}"
-                    )
-                )
                 if selected_commodity:
                     st.caption(
                         "Total aggregates each contract's Greeks for parallel price and volatility moves "
@@ -1129,33 +1201,36 @@ with tabs[0]:
                         f"All positions; Delta, Gamma, and Vega are measured against {fs_contract}."
                     )
                 st.dataframe(
-                    tenor_df,
+                    tenor_df.style
+                    .format(lambda v: f"{v:.2f}")
+                    .format(lambda v: f"{v:.3f}", subset=[c for c in tenor_df.columns if c == "Value ($k)"])
+                    .map(_red_if_negative),
                     width="stretch",
                     height=39 + 32 * len(tenor_df),
                     row_height=32,
                     column_config={
-                        "Delta (contracts)": st.column_config.TextColumn(
+                        "Delta (contracts)": st.column_config.Column(
                             "Delta", help="Delta (contracts)"
                         ),
-                        "Gamma (ΔDelta contracts/1¢/bu)": st.column_config.TextColumn(
+                        "Gamma (ΔDelta contracts/1¢/bu)": st.column_config.Column(
                             "Gamma", help="Gamma (ΔDelta contracts/1¢/bu)"
                         ),
-                        "Vega ($k/1% vol move)": st.column_config.TextColumn(
+                        "Vega ($k/1% vol move)": st.column_config.Column(
                             "Vega", help="Vega ($k/1% vol move)"
                         ),
-                        "Theta ($k/1 day decay)": st.column_config.TextColumn(
+                        "Theta ($k/1 day decay)": st.column_config.Column(
                             "Theta", help="Theta ($k/1 day decay)"
                         ),
-                        "Rho ($k/1% rate move)": st.column_config.TextColumn(
+                        "Rho ($k/1% rate move)": st.column_config.Column(
                             "Rho", help="Rho ($k/1% rate move)"
                         ),
-                        "Volga (ΔVega/1 vol pt)": st.column_config.TextColumn(
+                        "Volga (ΔVega/1 vol pt)": st.column_config.Column(
                             "Volga", help="Volga (ΔVega/1 vol pt)"
                         ),
-                        "Vanna-D (ΔDelta/1 vol pt)": st.column_config.TextColumn(
+                        "Vanna-D (ΔDelta/1 vol pt)": st.column_config.Column(
                             "Vanna-D", help="Vanna-D (ΔDelta/1 vol pt)"
                         ),
-                        "Vanna-V ($k Vega/1¢)": st.column_config.TextColumn(
+                        "Vanna-V ($k Vega/1¢)": st.column_config.Column(
                             "Vanna-V", help="Vanna-V ($k Vega/1¢)"
                         ),
                     },
@@ -1164,44 +1239,57 @@ with tabs[0]:
 
 with tabs[1]:
 
-    st.subheader("Spot and Vol Ladders")
+    st.subheader("Price Ladder")
     _tab_help(
-        "Recomputes the portfolio's P&L and Greeks across a range of futures prices (Spot Ladder) and "
-        "vol levels (Vol Ladder), so you can see how risk changes before the market actually moves."
+        "Recomputes the portfolio's P&L and Greeks across a range of futures prices, so you can see how "
+        "risk changes before the market actually moves. Each column is a move in the chosen contract's "
+        "price; money rows are in cents/bu x contracts (x $50 per contract for dollars)."
     )
 
-    fs_contract = _contract_selector("fs_ladders") if has_positions else None
-    spot_col, vol_col = st.columns(2, gap="small")
+    fs_contract = _contract_selector("fs_price_ladder") if has_positions else None
+    spot_inputs = st.columns([1, 1, 1, 5], gap="small")
+    spot_low = spot_inputs[0].number_input("Low (¢)", value=-50, step=5, key="spot_low")
+    spot_high = spot_inputs[1].number_input("High (¢)", value=50, step=5, key="spot_high")
+    spot_step = spot_inputs[2].number_input("Step (¢)", value=10, step=5, key="spot_step")
 
-    with spot_col:
-        st.markdown("**Spot Ladder**")
-        spot_inputs = st.columns(3, gap="small")
-        spot_low = spot_inputs[0].number_input("Low (¢)", value=-50, step=5, key="spot_low")
-        spot_high = spot_inputs[1].number_input("High (¢)", value=50, step=5, key="spot_high")
-        spot_step = spot_inputs[2].number_input("Step (¢)", value=10, step=5, key="spot_step")
-
-        if fs_contract:
-            ladder = spot_ladder(
-                portfolio, market, contract=fs_contract, low=spot_low, high=spot_high, step=spot_step
-            ).round(3)
-            st.dataframe(ladder, hide_index=True, width="content")
-            _download_df_button(ladder, "Download spot ladder CSV", "spot_ladder.csv")
-
-    with vol_col:
-        st.markdown("**Vol Ladder**")
-        vol_inputs = st.columns(3, gap="small")
-        vol_low = vol_inputs[0].number_input("Low (pts)", value=-10, step=1, key="vol_low")
-        vol_high = vol_inputs[1].number_input("High (pts)", value=10, step=1, key="vol_high")
-        vol_step = vol_inputs[2].number_input("Step (pts)", value=2, step=1, key="vol_step")
-
-        if fs_contract:
-            vladder = vol_ladder(
-                portfolio, market, contract=fs_contract, low=vol_low, high=vol_high, step=vol_step
-            ).round(3)
-            st.dataframe(vladder, hide_index=True, width="content")
-            _download_df_button(vladder, "Download vol ladder CSV", "vol_ladder.csv")
+    if fs_contract:
+        ladder = _transposed_ladder(
+            spot_ladder(
+                portfolio, market, contract=fs_contract, low=spot_low, high=spot_high, step=spot_step,
+                with_theta_rho=True,
+            ),
+            "Spot Move (¢)", "¢", PRICE_LADDER_LABELS,
+        )
+        _show_ladder(ladder, PRICE_LADDER_LABELS["PnL"], PRICE_LADDER_LABELS["Futures Price"])
+        _download_df_button(ladder.round(3), "Download price ladder CSV", "price_ladder.csv")
 
 with tabs[2]:
+
+    st.subheader("Vol Ladder")
+    _tab_help(
+        "Recomputes the portfolio's P&L and Greeks across a range of vol levels on the chosen contract's "
+        "options. Each column is a vol shift in points; money rows are in cents/bu x contracts "
+        "(x $50 per contract for dollars)."
+    )
+
+    fs_contract = _contract_selector("fs_vol_ladder") if has_positions else None
+    vol_inputs = st.columns([1, 1, 1, 5], gap="small")
+    vol_low = vol_inputs[0].number_input("Low (pts)", value=-10, step=1, key="vol_low")
+    vol_high = vol_inputs[1].number_input("High (pts)", value=10, step=1, key="vol_high")
+    vol_step = vol_inputs[2].number_input("Step (pts)", value=2, step=1, key="vol_step")
+
+    if fs_contract:
+        vladder = _transposed_ladder(
+            vol_ladder(
+                portfolio, market, contract=fs_contract, low=vol_low, high=vol_high, step=vol_step,
+                with_theta_rho=True,
+            ),
+            "Vol Shift (pts)", " pts", VOL_LADDER_LABELS,
+        )
+        _show_ladder(vladder, VOL_LADDER_LABELS["PnL"])
+        _download_df_button(vladder.round(3), "Download vol ladder CSV", "vol_ladder.csv")
+
+with tabs[3]:
 
     st.subheader("Spot x Vol Surface")
     _tab_help(
@@ -1222,7 +1310,7 @@ with tabs[2]:
             st.pyplot(plt.gcf(), use_container_width=False)
             plt.close()
 
-with tabs[3]:
+with tabs[4]:
 
     st.subheader("Stress Ladders")
     _tab_help(
@@ -1239,7 +1327,7 @@ with tabs[3]:
         st.pyplot(plt.gcf())
         plt.close()
 
-with tabs[4]:
+with tabs[5]:
 
     st.subheader("Strike Map")
     _tab_help(
@@ -1262,7 +1350,7 @@ with tabs[4]:
                 st.pyplot(plt.gcf(), use_container_width=False)
                 plt.close()
 
-with tabs[5]:
+with tabs[6]:
 
     st.subheader("Payoff Diagram")
     _tab_help(
@@ -1283,7 +1371,7 @@ with tabs[5]:
             st.pyplot(plt.gcf(), use_container_width=False)
             plt.close()
 
-with tabs[6]:
+with tabs[7]:
 
     st.subheader("Breakevens")
     _tab_help(
