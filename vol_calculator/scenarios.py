@@ -543,6 +543,36 @@ def report_by_tenor(portfolio, market, contract=None, by_contract=False, commodi
     return pd.DataFrame(rows).set_index("Tenor")
 
 
+def report_by_tenor_groups(portfolio, market, commodity):
+    """Return each underlying contract's subtotal and its individual tenor rows."""
+
+    legs_by_contract = {}
+    for leg in _flatten_positions(portfolio.positions):
+        if commodity_from_contract(leg.contract, fallback=None) == commodity:
+            legs_by_contract.setdefault(leg.contract, []).append(leg)
+
+    groups = []
+    for contract in sorted(legs_by_contract, key=_contract_sort_key):
+        legs = legs_by_contract[contract]
+        details = _report_by_contract_tenor(legs, market, descriptive_labels=True)
+        details = details.drop(index="Total")
+        subtotal = details.sum().to_dict()
+
+        month_code = contract[-3] if contract and len(contract) >= 3 else ""
+        year_code = contract[-2:] if contract and len(contract) >= 2 else ""
+        month = MONTH_CODES.get(month_code)
+        contract_month = f"{month} 20{year_code}" if month and year_code.isdigit() else contract
+
+        groups.append({
+            "contract": contract,
+            "label": f"{contract_month} ({contract})",
+            "subtotal": subtotal,
+            "details": details,
+        })
+
+    return groups
+
+
 def _contract_sort_key(contract):
     """Chronological within a commodity: ZCZ26 before ZCH27 (plain string order would put H27 first)."""
 

@@ -35,9 +35,11 @@ contract multiplier. The Tenor and ladder headers include each measure's units:
 - Vanna-D is the change in Delta per volatility point; Vanna-V is the change in Vega ($K per
   volatility point) per 1¢/bu price move.
 
-The Greek Summary by Tenor groups futures by underlying contract and options by underlying contract
-and expiry. Its column headers include units and provide tooltips explaining each sensitivity and how
-the selected commodity affects the calculation scope.
+The Greek Summary by Tenor shows a subtotal for each underlying futures contract, aggregating its
+future and all options that reference it even when an option's listed month differs. Expand a
+contract group to see the individual futures and option-expiry rows. Its column headers include units
+and provide tooltips explaining each sensitivity and how the selected commodity affects the calculation
+scope.
 
 ## Portfolio screen
 
@@ -45,10 +47,13 @@ The Market panel shows compact quote tables for the available commodities. Portf
 actions (clear, upload, import, and download) are grouped under the collapsed **Manage Portfolio**
 section to keep the Add Leg form and position data visible. The Add Leg form labels the position size
 as **Quantity**; its Underlying field is read-only (always the live price). Current Positions show
-short quantities in red and a First Notice column for futures (CBOT: last business day of the month
-before delivery). The positions table refreshes every 5 seconds with live prices (Underlying Price,
-TheoV). Option expiries are stored as dates, so Expiry (d) counts down daily; expired options are
-greyed out until removed.
+short quantities in red and support direct quantity edits, which are autosaved and refresh analysis
+views. For structures, quantity edits apply to the selected leg; removing any selected structure leg
+removes the full structure. Strike and Expiry (d) display with no decimals; Entry Price, TheoV, and
+Underlying Price display with two decimals, while Vol (%) retains its existing precision. The table
+also includes a First Notice column for futures (CBOT: last business day of the month before delivery).
+It refreshes every 5 seconds with live prices (Underlying Price, TheoV). Option expiries are stored
+as dates, so Expiry (d) counts down daily; expired options are greyed out until removed.
 
 Analysis tabs compute only when opened, using the latest prices ("Prices as of" caption). **Greek
 Summary by Tenor** shows negatives in red. The **Price Ladder**, **Vol Ladder** and **Decay Ladder**

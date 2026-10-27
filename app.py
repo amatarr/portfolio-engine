@@ -1,3 +1,4 @@
+import math
 import re
 import tempfile
 from datetime import date, datetime, timedelta, timezone
@@ -27,6 +28,7 @@ from vol_calculator import (
     vol_ladder,
     decay_ladder,
     report_by_tenor,
+    report_by_tenor_groups,
     breakevens_quadratic,
     breakevens_numerical,
     plot_surface,
@@ -279,7 +281,7 @@ def _structure_kind(name):
 
 def _leg_row(
     leg, position_index, structure, contract, stored_price, market,
-    future_vol_pct=None, future_entry_price=None,
+    future_vol_pct=None, future_entry_price=None, leg_index=0,
 ):
     """
     stored_price is whatever meta["settlement_price"] holds -- for a
@@ -294,7 +296,7 @@ def _leg_row(
             underlying_price = stored_price
 
         return {
-            "#": position_index, "Contract": contract,
+            "#": position_index, "_Leg": leg_index, "Contract": contract,
             "Entry Price": future_entry_price if future_entry_price is not None else stored_price,
             "Structure": structure, "Type": "Future",
             "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None,
@@ -320,7 +322,7 @@ def _leg_row(
     days_left = _days_to_expiry(leg)
 
     return {
-        "#": position_index, "Contract": contract, "Entry Price": entry_price,
+        "#": position_index, "_Leg": leg_index, "Contract": contract, "Entry Price": entry_price,
         "Structure": structure,
         "Type": "Call" if leg.option_type == "call" else "Put",
         "Quantity": leg.quantity, "Strike": leg.strike,
@@ -345,7 +347,10 @@ def _positions_table_for_commodity(portfolio, meta, commodity, market):
 
         if isinstance(pos, Structure):
             structure = _structure_kind(pos.name)
-            rows.extend(_leg_row(leg, i, structure, contract, stored_price, market) for leg in pos.legs)
+            rows.extend(
+                _leg_row(leg, i, structure, contract, stored_price, market, leg_index=leg_index)
+                for leg_index, leg in enumerate(pos.legs)
+            )
         else:
             rows.append(_leg_row(
                 pos, i, "-", contract, stored_price, market,
@@ -715,10 +720,6 @@ def _render_quotes_box():
                     st.session_state.market.futures_prices[code] = float(edited_price)
 
 
-def _grey_if_expired(row):
-    return ["color: #9e9e9e"] * len(row) if row["Expired"] else [""] * len(row)
-
-
 @st.fragment(run_every="5s")
 def _render_positions():
     """
@@ -739,32 +740,90 @@ def _render_positions():
         table = _positions_table_for_commodity(
             st.session_state.portfolio, meta, group_commodity, st.session_state.market,
         )
-        styled_table = (
-            table.style
-            .format(_fmt_number)
-            .format(lambda d: d.strftime("%Y-%m-%d") if d else "None", subset=["First Notice"])
+        editor_table = table.drop(columns=["#", "_Leg", "Expired"]).copy()
+        editor_table["Remove"] = False
+        editor_table.loc[table["Expired"], "Expiry (d)"] = "Expired"
+        styled_editor_table = (
+            editor_table.style
             .map(_red_if_negative, subset=["Quantity"])
-            .apply(_grey_if_expired, axis=1)
+            .apply(
+                lambda row: (
+                    ["color: #9e9e9e"] * len(row)
+                    if table.loc[row.name, "Expired"] else [""] * len(row)
+                ),
+                axis=1,
+            )
         )
-        expired_rows = table.index[table["Expired"]]
-        if len(expired_rows):
-            styled_table = styled_table.format(lambda d: "Expired", subset=pd.IndexSlice[expired_rows, "Expiry (d)"])
-        selection = st.dataframe(
-            styled_table,
+        editor_key_rows = tuple(
+            (
+                int(row["#"]), int(row["_Leg"]), row["Contract"], row["Type"],
+                row["Strike"], row["Expiry (d)"],
+            )
+            for _, row in table.iterrows()
+        )
+        editor_key = f"positions_editor_{group_commodity}_{hash(editor_key_rows)}"
+        edited_table = st.data_editor(
+            styled_editor_table,
             hide_index=True,
             width="content",
             height=min(38 * (len(table) + 1), 400),
+            row_height=32,
+            disabled=[column for column in editor_table.columns if column not in ("Quantity", "Remove")],
             column_order=[
                 "Contract", "Type", "Strike", "Quantity", "Entry Price", "TheoV",
                 "Underlying Price", "Structure", "Expiry (d)", "First Notice", "Vol (%)",
+                "Remove",
             ],
-            on_select="rerun",
-            selection_mode="multi-row",
-            key=f"positions_table_{group_commodity}",
+            key=editor_key,
+            column_config={
+                "Quantity": st.column_config.NumberColumn(
+                    "Quantity",
+                    help="Edit the signed position quantity. Negative values represent short positions.",
+                    format="%g",
+                    step=1,
+                    required=True,
+                ),
+                "Remove": st.column_config.CheckboxColumn(
+                    "Remove",
+                    help="Select rows to remove, then use the button below.",
+                ),
+                "Strike": st.column_config.NumberColumn("Strike", format="%.0f"),
+                "Entry Price": st.column_config.NumberColumn("Entry Price", format="%.2f"),
+                "TheoV": st.column_config.NumberColumn("TheoV", format="%.2f"),
+                "Underlying Price": st.column_config.NumberColumn("Underlying Price", format="%.2f"),
+                "Expiry (d)": st.column_config.NumberColumn("Expiry (d)", format="%.0f"),
+                "Vol (%)": st.column_config.NumberColumn("Vol (%)", format="%.2f"),
+                "First Notice": st.column_config.DateColumn("First Notice", format="YYYY-MM-DD"),
+            },
         )
 
-        selected_rows = selection["selection"]["rows"]
-        selected_positions = sorted({table.iloc[r]["#"] for r in selected_rows}, reverse=True)
+        changed_quantities = False
+        for row_index, quantity in enumerate(edited_table["Quantity"]):
+            if pd.isna(quantity):
+                st.error("Position quantity cannot be blank.")
+                continue
+            quantity = float(quantity)
+            if not math.isfinite(quantity):
+                st.error("Position quantity must be a finite number.")
+                continue
+
+            position_index = int(table.iloc[row_index]["#"])
+            leg_index = int(table.iloc[row_index]["_Leg"])
+            position = st.session_state.portfolio.positions[position_index]
+            leg = position.legs[leg_index] if isinstance(position, Structure) else position
+            if quantity != leg.quantity:
+                leg.quantity = int(quantity) if quantity.is_integer() else quantity
+                changed_quantities = True
+
+        if changed_quantities:
+            _autosave_portfolio()
+            st.rerun(scope="app")
+
+        selected_positions = sorted({
+            int(table.iloc[row_index]["#"])
+            for row_index, should_remove in enumerate(edited_table["Remove"])
+            if should_remove
+        }, reverse=True)
 
         if selected_positions and st.button(
             f"Remove Selected ({len(selected_positions)} position(s))",
@@ -1138,7 +1197,7 @@ def _contracts_in_portfolio(portfolio):
     return sorted(contracts)
 
 
-def _contract_selector(key):
+def _contract_selector(key, label="Future Spot"):
     """
     The "Future Spot" being analyzed on this tab: only this contract's price
     (and, where relevant, vol) is shocked -- every other contract's legs are
@@ -1170,7 +1229,7 @@ def _contract_selector(key):
         for contract in available
     }
 
-    return st.selectbox("Future Spot", available, format_func=labels.get, key=key)
+    return st.selectbox(label, available, format_func=labels.get, key=key)
 
 
 def _tab_help(text, formulas=None):
@@ -1224,10 +1283,13 @@ _TAB_INPUT_DEFAULTS = {
 }
 _TAB_SELECTOR_OPTIONS = {
     **{k: set(_contracts_in_portfolio(portfolio)) for k in (
-        "fs_greeks", "fs_price_ladder", "fs_vol_ladder", "fs_decay_ladder",
+        "fs_price_ladder", "fs_vol_ladder", "fs_decay_ladder",
         "fs_surface", "fs_stress", "fs_payoff", "fs_breakevens",
     )},
-    "tenor_commodity": {"All commodities", *(m.get("commodity") for m in st.session_state.position_meta)},
+    "tenor_commodity": {
+        meta.get("commodity") for meta in st.session_state.position_meta
+        if meta.get("commodity") in COMMODITIES
+    },
     "surface_metric": None,
     "strike_weight": None,
 }
@@ -1290,105 +1352,129 @@ with tabs[0]:
                 commodity for commodity in COMMODITIES
                 if any(meta.get("commodity") == commodity for meta in st.session_state.position_meta)
             ]
-            selector_cols = st.columns([1, 1, 3], gap="small")
-            with selector_cols[0]:
-                fs_contract = _contract_selector("fs_greeks")
-            with selector_cols[1]:
-                tenor_commodity = st.selectbox(
-                    "Commodity",
-                    ["All commodities", *available_commodities],
-                    key="tenor_commodity",
-                )
+            if not available_commodities:
+                st.info("No active commodities found in the current positions.")
+            selector_cols = st.columns([1, 4], gap="small")
+            if available_commodities:
+                with selector_cols[0]:
+                    tenor_commodity = st.selectbox(
+                        "Commodity",
+                        available_commodities,
+                        key="tenor_commodity",
+                    )
 
-            if fs_contract:
-                selected_commodity = None if tenor_commodity == "All commodities" else tenor_commodity
-                tenor_df = report_by_tenor(
-                    portfolio, market, fs_contract, commodity=selected_commodity
+            if available_commodities:
+                tenor_groups = report_by_tenor_groups(
+                    portfolio, market, commodity=tenor_commodity
                 )
-                if selected_commodity:
-                    st.caption(
-                        "Total aggregates each contract's Greeks for parallel price and volatility moves "
-                        f"across {selected_commodity}."
-                    )
-                else:
-                    st.caption(
-                        f"All positions; Delta, Gamma, and Vega are measured against {fs_contract}."
-                    )
+                tenor_group_frames = [group["details"] for group in tenor_groups]
+                tenor_df = (
+                    pd.concat(tenor_group_frames)
+                    if tenor_group_frames
+                    else report_by_tenor(portfolio, market, commodity=tenor_commodity)
+                )
+                if tenor_groups:
+                    tenor_df.loc["Total"] = tenor_df.sum()
+                st.caption(
+                    "Each subtotal combines futures and all options sharing the same underlying contract, "
+                    "even when an option is listed in a different month. Expand a group to see its individual "
+                    f"tenors. Total aggregates parallel price and volatility moves across {tenor_commodity}."
+                )
+                tenor_column_config = {
+                    "_index": st.column_config.TextColumn(
+                        "Underlying / tenor",
+                        help=(
+                            "The summary shows one subtotal per underlying futures contract. "
+                            "Expanded details show its futures and option expiry rows."
+                        ),
+                    ),
+                    "Delta (contracts)": st.column_config.Column(
+                        "Delta (contracts)",
+                        help=(
+                            "Portfolio value sensitivity to a 1¢/bu price move, expressed as "
+                            "futures-equivalent contracts. Positive is long exposure; negative is short."
+                        ),
+                    ),
+                    "Gamma (ΔDelta contracts/1¢/bu)": st.column_config.Column(
+                        "Gamma (ΔDelta contracts/1¢/bu)",
+                        help=(
+                            "Change in Delta, in futures-equivalent contracts, for a 1¢/bu "
+                            "futures price move."
+                        ),
+                    ),
+                    "Vega ($K/1 vol pt)": st.column_config.Column(
+                        "Vega ($K/1 vol pt)",
+                        help=(
+                            "Approximate change in portfolio value ($K) for a 1 vol point "
+                            "(1 percentage point) increase in volatility."
+                        ),
+                    ),
+                    "Theta ($K/1 day decay)": st.column_config.Column(
+                        "Theta ($K/1 day decay)",
+                        help=(
+                            "Approximate change in portfolio value ($K) as one day passes, "
+                            "with market inputs otherwise unchanged."
+                        ),
+                    ),
+                    "Rho ($K/1% rate move)": st.column_config.Column(
+                        "Rho ($K/1% rate move)",
+                        help=(
+                            "Approximate change in portfolio value ($K) for a 1 percentage "
+                            "point increase in the interest rate."
+                        ),
+                    ),
+                    "Volga ($K/1 vol pt²)": st.column_config.Column(
+                        "Volga ($K/1 vol pt²)",
+                        help=(
+                            "Change in Vega ($K per vol point) for each additional vol point; "
+                            "the second-order sensitivity to volatility."
+                        ),
+                    ),
+                    "Vanna-D (ΔDelta/1 vol pt)": st.column_config.Column(
+                        "Vanna-D (ΔDelta contracts/1 vol pt)",
+                        help=(
+                            "Change in Delta (futures-equivalent contracts) for a 1 vol point "
+                            "(1 percentage point) volatility increase."
+                        ),
+                    ),
+                    "Vanna-V (change in Vega [$K/vol pt] per 1¢)": st.column_config.Column(
+                        "Vanna-V (change in Vega [$K/vol pt] per 1¢)",
+                        help=(
+                            "Change in Vega ($K per vol point) for each 1¢/bu futures price move."
+                        ),
+                    ),
+                }
+                subtotal_rows = [
+                    {"Underlying / tenor": group["label"], **group["subtotal"]}
+                    for group in tenor_groups
+                ]
+                subtotal_rows.append({
+                    "Underlying / tenor": "Total",
+                    **tenor_df.loc["Total"].to_dict(),
+                })
+                subtotal_df = pd.DataFrame(subtotal_rows).set_index("Underlying / tenor")
                 st.dataframe(
-                    tenor_df.style
+                    subtotal_df.style
                     .format(lambda v: f"{v:.2f}")
-                    .format(lambda v: f"{v:.3f}", subset=[c for c in tenor_df.columns if c == "Value ($k)"])
                     .map(_red_if_negative),
                     width="stretch",
-                    height=39 + 32 * len(tenor_df),
+                    height=39 + 32 * len(subtotal_df),
                     row_height=32,
-                    column_config={
-                        "_index": st.column_config.TextColumn(
-                            "Tenor",
-                            help=(
-                                "Rows group futures by contract and options by underlying contract and expiry. "
-                                "Total aggregates the included positions. With All commodities, sensitivities "
-                                "to price and volatility are measured against the selected futures contract; "
-                                "with one commodity selected, each row uses its own underlying contract."
-                            ),
-                        ),
-                        "Delta (contracts)": st.column_config.Column(
-                            "Delta (contracts)",
-                            help=(
-                                "Portfolio value sensitivity to a 1¢/bu price move, expressed as "
-                                "futures-equivalent contracts. Positive is long exposure; negative is short."
-                            ),
-                        ),
-                        "Gamma (ΔDelta contracts/1¢/bu)": st.column_config.Column(
-                            "Gamma (ΔDelta contracts/1¢/bu)",
-                            help=(
-                                "Change in Delta, in futures-equivalent contracts, for a 1¢/bu "
-                                "futures price move."
-                            ),
-                        ),
-                        "Vega ($K/1 vol pt)": st.column_config.Column(
-                            "Vega ($K/1 vol pt)",
-                            help=(
-                                "Approximate change in portfolio value ($K) for a 1 vol point "
-                                "(1 percentage point) increase in volatility."
-                            ),
-                        ),
-                        "Theta ($K/1 day decay)": st.column_config.Column(
-                            "Theta ($K/1 day decay)",
-                            help=(
-                                "Approximate change in portfolio value ($K) as one day passes, "
-                                "with market inputs otherwise unchanged."
-                            ),
-                        ),
-                        "Rho ($K/1% rate move)": st.column_config.Column(
-                            "Rho ($K/1% rate move)",
-                            help=(
-                                "Approximate change in portfolio value ($K) for a 1 percentage "
-                                "point increase in the interest rate."
-                            ),
-                        ),
-                        "Volga ($K/1 vol pt²)": st.column_config.Column(
-                            "Volga ($K/1 vol pt²)",
-                            help=(
-                                "Change in Vega ($K per vol point) for each additional vol point; "
-                                "the second-order sensitivity to volatility."
-                            ),
-                        ),
-                        "Vanna-D (ΔDelta/1 vol pt)": st.column_config.Column(
-                            "Vanna-D (ΔDelta contracts/1 vol pt)",
-                            help=(
-                                "Change in Delta (futures-equivalent contracts) for a 1 vol point "
-                                "(1 percentage point) volatility increase."
-                            ),
-                        ),
-                        "Vanna-V (change in Vega [$K/vol pt] per 1¢)": st.column_config.Column(
-                            "Vanna-V (change in Vega [$K/vol pt] per 1¢)",
-                            help=(
-                                "Change in Vega ($K per vol point) for each 1¢/bu futures price move."
-                            ),
-                        ),
-                    },
+                    column_config=tenor_column_config,
                 )
+                for group in tenor_groups:
+                    with st.expander(
+                        f"Show tenor details for {group['label']} ({len(group['details'])} rows)"
+                    ):
+                        st.dataframe(
+                            group["details"].style
+                            .format(lambda v: f"{v:.2f}")
+                            .map(_red_if_negative),
+                            width="stretch",
+                            height=39 + 32 * len(group["details"]),
+                            row_height=32,
+                            column_config=tenor_column_config,
+                        )
                 _download_df_button(tenor_df, "Download tenor report CSV", "report_by_tenor.csv")
 
 with tabs[1]:
