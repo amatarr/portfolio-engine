@@ -53,7 +53,9 @@ removes the full structure. Strike and Expiry (d) display with no decimals; Entr
 Underlying Price display with two decimals, while Vol (%) retains its existing precision. The table
 also includes a First Notice column for futures (CBOT: last business day of the month before delivery).
 It refreshes every 5 seconds with live prices (Underlying Price, TheoV). Option expiries are stored
-as dates, so Expiry (d) counts down daily; expired options are greyed out until removed.
+as dates, so Expiry (d) counts down daily; expired options are greyed out until removed. Expiry values
+are rendered as text in the editable table so numeric day counts and the "Expired" label work
+consistently across Pandas versions.
 
 Analysis tabs compute only when opened, using the latest prices ("Prices as of" caption). **Greek
 Summary by Tenor** shows negatives in red. The **Price Ladder**, **Vol Ladder** and **Decay Ladder**

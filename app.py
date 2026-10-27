@@ -745,7 +745,10 @@ def _render_positions():
         )
         editor_table = table.drop(columns=["#", "_Leg", "Expired"]).copy()
         editor_table["Remove"] = False
-        editor_table.loc[table["Expired"], "Expiry (d)"] = "Expired"
+        editor_table["Expiry (d)"] = [
+            "Expired" if expired else (str(int(days)) if pd.notna(days) else "None")
+            for days, expired in zip(table["Expiry (d)"], table["Expired"])
+        ]
         styled_editor_table = (
             editor_table.style
             .map(_red_if_negative, subset=["Quantity"])
@@ -794,7 +797,7 @@ def _render_positions():
                 "Entry Price": st.column_config.NumberColumn("Entry Price", format="%.2f"),
                 "TheoV": st.column_config.NumberColumn("TheoV", format="%.2f"),
                 "Underlying Price": st.column_config.NumberColumn("Underlying Price", format="%.2f"),
-                "Expiry (d)": st.column_config.NumberColumn("Expiry (d)", format="%.0f"),
+                "Expiry (d)": st.column_config.TextColumn("Expiry (d)"),
                 "Vol (%)": st.column_config.NumberColumn("Vol (%)", format="%.2f"),
                 "First Notice": st.column_config.DateColumn("First Notice", format="YYYY-MM-DD"),
             },
