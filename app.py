@@ -27,6 +27,9 @@ from vol_calculator import (
     spot_ladder,
     vol_ladder,
     decay_ladder,
+    commodity_spot_ladder,
+    commodity_vol_ladder,
+    commodity_decay_ladder,
     report_by_tenor,
     report_by_tenor_groups,
     breakevens_quadratic,
@@ -1190,11 +1193,33 @@ def _contracts_in_portfolio(portfolio):
     contracts = []
 
     for pos in portfolio.positions:
-        c = pos.contract
-        if c and c not in contracts:
-            contracts.append(c)
+        legs = pos.legs if isinstance(pos, Structure) else [pos]
+        for leg in legs:
+            c = leg.contract
+            if c and c not in contracts:
+                contracts.append(c)
 
     return sorted(contracts)
+
+
+def _commodity_summary_option(commodity):
+    return f"__commodity_summary__:{commodity}"
+
+
+def _ladder_selection_options(portfolio):
+    contracts_by_commodity = {}
+    for contract in _contracts_in_portfolio(portfolio):
+        commodity = _commodity_from_contract(contract, fallback=None)
+        if commodity:
+            contracts_by_commodity.setdefault(commodity, []).append(contract)
+
+    options = []
+    for commodity in COMMODITIES:
+        contracts = contracts_by_commodity.get(commodity, [])
+        if contracts:
+            options.append(_commodity_summary_option(commodity))
+            options.extend(contracts)
+    return options
 
 
 def _contract_selector(key, label="Future Spot"):
@@ -1230,6 +1255,23 @@ def _contract_selector(key, label="Future Spot"):
     }
 
     return st.selectbox(label, available, format_func=labels.get, key=key)
+
+
+def _ladder_contract_selector(key):
+    options = _ladder_selection_options(st.session_state.portfolio)
+    if not options:
+        st.info("No contract found in the current positions.")
+        return None
+
+    labels = {
+        option: (
+            f"{option.split(':', 1)[1]} Summary"
+            if option.startswith("__commodity_summary__:")
+            else f"{_commodity_from_contract(option)}: {option}"
+        )
+        for option in options
+    }
+    return st.selectbox("Future Spot", options, format_func=labels.get, key=key)
 
 
 def _tab_help(text, formulas=None):
@@ -1276,15 +1318,17 @@ if _unpriced:
 # of inputs that aren't rendered -- so each tab's settings are re-stored
 # every run (defaults set here, not on the widgets) to survive tab switches.
 _TAB_INPUT_DEFAULTS = {
-    "spot_low": -50, "spot_high": 50, "spot_step": 10,
-    "vol_low": -10, "vol_high": 10, "vol_step": 2,
-    "decay_horizon": 60, "decay_step": 5,
+    "spot_low": -20, "spot_high": 20, "spot_step": 2,
+    "vol_low": -5, "vol_high": 5, "vol_step": 1,
+    "decay_horizon": 30, "decay_step": 2,
     "payoff_steps": "0,30,60",
 }
 _TAB_SELECTOR_OPTIONS = {
     **{k: set(_contracts_in_portfolio(portfolio)) for k in (
-        "fs_price_ladder", "fs_vol_ladder", "fs_decay_ladder",
         "fs_surface", "fs_stress", "fs_payoff", "fs_breakevens",
+    )},
+    **{k: set(_ladder_selection_options(portfolio)) for k in (
+        "fs_price_ladder", "fs_vol_ladder", "fs_decay_ladder",
     )},
     "tenor_commodity": {
         meta.get("commodity") for meta in st.session_state.position_meta
@@ -1482,30 +1526,42 @@ with tabs[1]:
         st.subheader("Price Ladder")
         _prices_as_of_caption()
         _tab_help(
-            "Recomputes the portfolio's P&L and Greeks across a range of futures prices, so you can see how "
-            "risk changes before the market actually moves. Each column is a move in the chosen contract's "
-            "price; PnL, portfolio value, and monetary Greeks are shown in $K using the contract multiplier."
+            "Recomputes P&L and Greeks across futures-price moves. Select an individual contract to shock "
+            "only that underlying, or a commodity summary to apply each move in parallel across all of that "
+            "commodity's contracts. Summary results include only that commodity's positions. Monetary "
+            "values are shown in $K using the contract multiplier."
         )
 
-        fs_contract = _contract_selector("fs_price_ladder") if has_positions else None
+        price_selection = _ladder_contract_selector("fs_price_ladder") if has_positions else None
         spot_inputs = st.columns([1, 1, 1, 5], gap="small")
         spot_low = spot_inputs[0].number_input("Low (¢)", step=5, key="spot_low")
         spot_high = spot_inputs[1].number_input("High (¢)", step=5, key="spot_high")
         spot_step = spot_inputs[2].number_input("Step (¢)", step=5, key="spot_step")
 
-        if fs_contract:
-            ladder = _ladder_money_in_thousands(
-                spot_ladder(
-                    portfolio, market, contract=fs_contract, low=spot_low, high=spot_high, step=spot_step,
+        if price_selection:
+            is_commodity_summary = price_selection.startswith("__commodity_summary__:")
+            if is_commodity_summary:
+                commodity = price_selection.split(":", 1)[1]
+                ladder = commodity_spot_ladder(
+                    portfolio, market, commodity, low=spot_low, high=spot_high, step=spot_step,
                     with_theta_rho=True,
-                ),
-                market,
-            )
+                )
+                price_labels = {
+                    key: value for key, value in PRICE_LADDER_LABELS.items()
+                    if key != "Futures Price"
+                }
+            else:
+                ladder = spot_ladder(
+                    portfolio, market, contract=price_selection, low=spot_low, high=spot_high,
+                    step=spot_step, with_theta_rho=True,
+                )
+                price_labels = PRICE_LADDER_LABELS
+            ladder = _ladder_money_in_thousands(ladder, market)
             ladder = _transposed_ladder(
-                ladder,
-                "Spot Move (¢)", PRICE_LADDER_LABELS, _signed("¢"),
+                ladder, "Spot Move (¢)", price_labels, _signed("¢"),
             )
-            _show_ladder(ladder, PRICE_LADDER_LABELS["PnL"], PRICE_LADDER_LABELS["Futures Price"])
+            price_label = price_labels.get("Futures Price")
+            _show_ladder(ladder, price_labels["PnL"], price_label)
             _download_df_button(ladder.round(3), "Download price ladder CSV", "price_ladder.csv")
 
 with tabs[2]:
@@ -1513,25 +1569,31 @@ with tabs[2]:
         st.subheader("Vol Ladder")
         _prices_as_of_caption()
         _tab_help(
-            "Recomputes the portfolio's P&L and Greeks across a range of vol levels on the chosen contract's "
-            "options. Each column is a vol shift in points; PnL, portfolio value, and monetary Greeks "
-            "are shown in $K using the contract multiplier."
+            "Recomputes P&L and Greeks across volatility shifts. Select an individual contract to shift "
+            "only its options, or a commodity summary to shift options across all of that commodity's "
+            "contracts in parallel. Summary results include only that commodity's positions. Monetary "
+            "values are shown in $K using the contract multiplier."
         )
 
-        fs_contract = _contract_selector("fs_vol_ladder") if has_positions else None
+        vol_selection = _ladder_contract_selector("fs_vol_ladder") if has_positions else None
         vol_inputs = st.columns([1, 1, 1, 5], gap="small")
         vol_low = vol_inputs[0].number_input("Low (pts)", step=1, key="vol_low")
         vol_high = vol_inputs[1].number_input("High (pts)", step=1, key="vol_high")
         vol_step = vol_inputs[2].number_input("Step (pts)", step=1, key="vol_step")
 
-        if fs_contract:
-            vladder = _ladder_money_in_thousands(
-                vol_ladder(
-                    portfolio, market, contract=fs_contract, low=vol_low, high=vol_high, step=vol_step,
+        if vol_selection:
+            if vol_selection.startswith("__commodity_summary__:"):
+                commodity = vol_selection.split(":", 1)[1]
+                vladder = commodity_vol_ladder(
+                    portfolio, market, commodity, low=vol_low, high=vol_high, step=vol_step,
                     with_theta_rho=True,
-                ),
-                market,
-            )
+                )
+            else:
+                vladder = vol_ladder(
+                    portfolio, market, contract=vol_selection, low=vol_low, high=vol_high, step=vol_step,
+                    with_theta_rho=True,
+                )
+            vladder = _ladder_money_in_thousands(vladder, market)
             vladder = _transposed_ladder(
                 vladder,
                 "Vol Shift (pts)", VOL_LADDER_LABELS, _signed(" pts"),
@@ -1544,22 +1606,34 @@ with tabs[3]:
         st.subheader("Decay Ladder")
         _prices_as_of_caption()
         _tab_help(
-            "Moves the whole book forward in calendar days with prices and vols held where they are, so you "
+            "Moves positions forward in calendar days with prices and vols held where they are, so you "
             "can see how P&L and Greeks change as options decay. An option that expires inside the horizon "
             "is exercised into futures if it is in the money at that point, and lapses worthless otherwise. "
-            "PnL, portfolio value, and monetary Greeks are shown in $K using the contract multiplier."
+            "Select an individual contract to measure its Greeks, or a commodity summary to show only that "
+            "commodity's positions with Greeks aggregated across its contracts. Monetary values are shown "
+            "in $K using the contract multiplier."
         )
 
-        fs_contract = _contract_selector("fs_decay_ladder") if has_positions else None
+        decay_selection = _ladder_contract_selector("fs_decay_ladder") if has_positions else None
         decay_inputs = st.columns([1, 1, 6], gap="small")
-        decay_horizon = decay_inputs[0].selectbox("Horizon (days)", [20, 40, 60], key="decay_horizon")
-        decay_step = decay_inputs[1].number_input("Step (days)", min_value=1, step=1, key="decay_step")
+        decay_horizon = decay_inputs[0].number_input(
+            "Horizon (days)", min_value=1, step=1, key="decay_horizon"
+        )
+        decay_step = decay_inputs[1].number_input(
+            "Step (days)", min_value=1, step=1, key="decay_step"
+        )
 
-        if fs_contract:
-            dladder = _ladder_money_in_thousands(
-                decay_ladder(portfolio, market, contract=fs_contract, horizon=decay_horizon, step=decay_step),
-                market,
-            )
+        if decay_selection:
+            if decay_selection.startswith("__commodity_summary__:"):
+                commodity = decay_selection.split(":", 1)[1]
+                dladder = commodity_decay_ladder(
+                    portfolio, market, commodity, horizon=decay_horizon, step=decay_step
+                )
+            else:
+                dladder = decay_ladder(
+                    portfolio, market, contract=decay_selection, horizon=decay_horizon, step=decay_step
+                )
+            dladder = _ladder_money_in_thousands(dladder, market)
             dladder = _transposed_ladder(
                 dladder,
                 "Days Forward", DECAY_LADDER_LABELS, lambda d: f"{d}d",

@@ -75,6 +75,60 @@ def spot_ladder(
     return pd.DataFrame(rows)
 
 
+def _portfolio_for_commodity(portfolio, commodity):
+    filtered = Portfolio()
+    for leg in _flatten_positions(portfolio.positions):
+        if commodity_from_contract(leg.contract, fallback=None) == commodity:
+            filtered.add(leg)
+    return filtered
+
+
+def _commodity_ladder_greeks(portfolio, market, contracts):
+    greeks = {}
+    for label, greek in (
+        ("Delta", GreekEngine.delta),
+        ("Gamma", GreekEngine.gamma),
+        ("Vega", GreekEngine.vega),
+        ("Volga", GreekEngine.volga),
+        ("Vanna-D", GreekEngine.vanna_delta),
+        ("Vanna-V", GreekEngine.vanna_vega),
+    ):
+        greeks[label] = sum(greek(portfolio, market, contract) for contract in contracts)
+    greeks.update(_theta_rho(portfolio, market))
+    return greeks
+
+
+def commodity_spot_ladder(portfolio, market, commodity, low=-50, high=50, step=10, with_theta_rho=False):
+    """Price ladder for one commodity, moving every underlying contract in parallel."""
+
+    commodity_portfolio = _portfolio_for_commodity(portfolio, commodity)
+    contracts = sorted({leg.contract for leg in commodity_portfolio.positions})
+    current_value = commodity_portfolio.value(market)
+    rows = []
+
+    for cents in range(low, high + step, step):
+        shocked_market = copy.deepcopy(market)
+        for contract in contracts:
+            shocked_market.futures_prices[contract] += cents
+        value = commodity_portfolio.value(shocked_market)
+        greeks = _commodity_ladder_greeks(commodity_portfolio, shocked_market, contracts)
+        row = {
+            "Spot Move (¢)": cents,
+            "PnL": value - current_value,
+            "Portfolio Value": value,
+            "Delta": greeks["Delta"],
+            "Gamma": greeks["Gamma"],
+            "Vega": greeks["Vega"],
+            "Vanna-V": greeks["Vanna-V"],
+            "Volga": greeks["Volga"],
+        }
+        if with_theta_rho:
+            row.update({"Theta": greeks["Theta"], "Rho": greeks["Rho"]})
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
 def vol_ladder(
     portfolio,
     market,
@@ -108,6 +162,40 @@ def vol_ladder(
             "Vanna-D": GreekEngine.vanna_delta(shocked_portfolio, market, contract),
             "Vanna-V": GreekEngine.vanna_vega(shocked_portfolio, market, contract),
         })
+
+    return pd.DataFrame(rows)
+
+
+def commodity_vol_ladder(portfolio, market, commodity, low=-10, high=10, step=2, with_theta_rho=False):
+    """Volatility ladder for one commodity, shifting options on all its contracts in parallel."""
+
+    commodity_portfolio = _portfolio_for_commodity(portfolio, commodity)
+    contracts = sorted({leg.contract for leg in commodity_portfolio.positions})
+    current_value = commodity_portfolio.value(market)
+    rows = []
+
+    for vol_shift in range(low, high + step, step):
+        shift = vol_shift / 100
+        shocked = Portfolio()
+        for leg in commodity_portfolio.positions:
+            shocked.add(leg.shift_vol(shift))
+
+        value = shocked.value(market)
+        greeks = _commodity_ladder_greeks(shocked, market, contracts)
+        row = {
+            "Vol Shift (pts)": vol_shift,
+            "PnL": value - current_value,
+            "Portfolio Value": value,
+            "Delta": greeks["Delta"],
+            "Gamma": greeks["Gamma"],
+            "Vega": greeks["Vega"],
+            "Volga": greeks["Volga"],
+            "Vanna-D": greeks["Vanna-D"],
+            "Vanna-V": greeks["Vanna-V"],
+        }
+        if with_theta_rho:
+            row.update({"Theta": greeks["Theta"], "Rho": greeks["Rho"]})
+        rows.append(row)
 
     return pd.DataFrame(rows)
 
@@ -191,6 +279,31 @@ def decay_ladder(
             "Gamma": GreekEngine.gamma(decayed, market, contract),
             **_theta_rho(decayed, market),
             "Vega": GreekEngine.vega(decayed, market, contract),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def commodity_decay_ladder(portfolio, market, commodity, horizon=60, step=5):
+    """Decay ladder for one commodity, advancing only its positions through time."""
+
+    commodity_portfolio = _portfolio_for_commodity(portfolio, commodity)
+    contracts = sorted({leg.contract for leg in commodity_portfolio.positions})
+    days_list = list(range(0, horizon + 1, step))
+    if days_list[-1] != horizon:
+        days_list.append(horizon)
+
+    current_value = commodity_portfolio.value(market)
+    rows = []
+    for days in days_list:
+        decayed = _decay_portfolio(commodity_portfolio, days, market) if days else commodity_portfolio
+        value = decayed.value(market)
+        greeks = _commodity_ladder_greeks(decayed, market, contracts)
+        rows.append({
+            "Days Forward": days,
+            "PnL": value - current_value,
+            "Portfolio Value": value,
+            **greeks,
         })
 
     return pd.DataFrame(rows)

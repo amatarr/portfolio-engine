@@ -58,8 +58,13 @@ as dates, so Expiry (d) counts down daily; expired options are greyed out until 
 Analysis tabs compute only when opened, using the latest prices ("Prices as of" caption). **Greek
 Summary by Tenor** shows negatives in red. The **Price Ladder**, **Vol Ladder** and **Decay Ladder**
 each have their own tab, transposed (moves as columns, Greeks as rows with units), with PnL shaded
-green/red by size and negative Greeks in red. The Decay Ladder moves the book 20/40/60 days forward;
-options expiring on the way are exercised if in the money, otherwise they lapse.
+green/red by size and negative Greeks in red. Each ladder selector offers a commodity summary as well
+as individual underlying contracts. A commodity summary isolates that commodity's positions and applies
+price or volatility shocks in parallel across its contracts; the decay summary advances only that
+commodity's positions through time. Price Ladder defaults are -20¢ to +20¢ in 2¢ steps, Vol Ladder
+defaults are -5 to +5 vol points in 1-point steps, and Decay Ladder defaults to a 30-day horizon in
+2-day steps. All values remain adjustable. Options expiring during decay are exercised if in the
+money, otherwise they lapse.
 
 ## Project layout
 
