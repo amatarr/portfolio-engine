@@ -32,9 +32,15 @@ actions (clear, upload, import, and download) are grouped under the collapsed **
 section to keep the Add Leg form and position data visible. The Add Leg form labels the position size
 as **Quantity**; its Underlying field is read-only (always the live price). Current Positions show
 short quantities in red and a First Notice column for futures (CBOT: last business day of the month
-before delivery). The Greek summary shows negatives in red. The **Price Ladder** and **Vol Ladder**
+before delivery). The positions table refreshes every 5 seconds with live prices (Underlying Price,
+TheoV). Option expiries are stored as dates, so Expiry (d) counts down daily; expired options are
+greyed out until removed.
+
+Analysis tabs compute only when opened, using the latest prices ("Prices as of" caption). **Greek
+Summary by Tenor** shows negatives in red. The **Price Ladder**, **Vol Ladder** and **Decay Ladder**
 each have their own tab, transposed (moves as columns, Greeks as rows with units), with PnL shaded
-green/red by size and negative Greeks in red.
+green/red by size and negative Greeks in red. The Decay Ladder moves the book 20/40/60 days forward;
+options expiring on the way are exercised if in the money, otherwise they lapse.
 
 ## Project layout
 

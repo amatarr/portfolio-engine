@@ -1,4 +1,5 @@
 import os
+from datetime import date
 
 import pandas as pd
 
@@ -17,6 +18,7 @@ _FIELDS = [
     "option_month",
     "entry_price",
     "underlying_price",
+    "expiry_date",
 ]
 
 
@@ -75,6 +77,7 @@ def _leg_to_row(leg, structure_id, structure_type):
             "volatility": "",
             "contract": leg.contract or "",
             "option_month": "",
+            "expiry_date": "",
         }
 
     if isinstance(leg, AmericanOption):
@@ -89,6 +92,7 @@ def _leg_to_row(leg, structure_id, structure_type):
             "volatility": leg.volatility,
             "contract": leg.contract or "",
             "option_month": leg.option_month or "",
+            "expiry_date": leg.expiry_date.isoformat() if leg.expiry_date else "",
         }
 
     raise TypeError(f"Unsupported leg type for CSV export: {type(leg)}")
@@ -161,6 +165,7 @@ def _row_to_leg(row):
             volatility=float(row["volatility"]),
             contract=contract,
             option_month=row.get("option_month") or None,
+            expiry_date=date.fromisoformat(row["expiry_date"]) if row.get("expiry_date") else None,
         )
 
     raise ValueError(f"Unknown instrument_type: {row['instrument_type']}")

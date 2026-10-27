@@ -13,6 +13,7 @@ from vol_calculator.greeks import (
 from vol_calculator.scenarios import (
     spot_ladder,
     vol_ladder,
+    decay_ladder,
     spot_vol_surface,
     breakevens_quadratic,
     breakevens_numerical,
@@ -98,6 +99,7 @@ __all__ = [
     "PERCENT",
     "spot_ladder",
     "vol_ladder",
+    "decay_ladder",
     "spot_vol_surface",
     "breakevens_quadratic",
     "breakevens_numerical",

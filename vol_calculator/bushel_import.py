@@ -172,6 +172,7 @@ def import_bushel_positions(path, as_of=None):
                 volatility=volatility,
                 contract=contract,
                 option_month=option_month,
+                expiry_date=maturity,
             )
             meta = {
                 "commodity": commodity, "contract": contract,

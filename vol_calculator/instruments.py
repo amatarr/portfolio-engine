@@ -58,6 +58,7 @@ class AmericanOption:
         volatility,
         contract=None,
         option_month=None,
+        expiry_date=None,
     ):
         self.quantity = quantity
         self.strike = strike
@@ -66,6 +67,9 @@ class AmericanOption:
         self.volatility = volatility
         self.contract = contract
         self.option_month = option_month
+        # Calendar expiry date, when known. Pricing only uses expiry_days;
+        # the Streamlit app re-derives expiry_days from this date each day.
+        self.expiry_date = expiry_date
 
     def price(self, market):
 
@@ -89,6 +93,7 @@ class AmericanOption:
             volatility=self.volatility + dv,
             contract=self.contract,
             option_month=self.option_month,
+            expiry_date=self.expiry_date,
         )
 
     def shift_time(self, days):
