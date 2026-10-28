@@ -57,9 +57,9 @@ as dates, so Expiry (d) counts down daily; expired options are greyed out until 
 are rendered as text in the editable table so numeric day counts and the "Expired" label work
 consistently across Pandas versions. Remove selections are retained across table refreshes until
 positions are removed or the portfolio is cleared or replaced. Temporary quantity-edit diagnostics
-write `POSITION_EDITOR_EVENT`, `POSITION_QUANTITY_UPDATE`, `POSITION_QUANTITY_ASSIGNED`, and
-`PORTFOLIO_AUTOSAVE_*` messages to the app logs; remove this instrumentation after the quantity
-revert issue is diagnosed.
+write `POSITION_EDITOR_EVENT` and `POSITION_QUANTITY_COMPARE` (editor values versus stored position
+quantity), `POSITION_QUANTITY_UPDATE`, `POSITION_QUANTITY_ASSIGNED`, and `PORTFOLIO_AUTOSAVE_*`
+messages to the app logs; remove this instrumentation after the quantity revert issue is diagnosed.
 
 Analysis tabs compute only when opened, using the latest prices ("Prices as of" caption). **Greek
 Summary by Tenor** shows negatives in red. The **Price Ladder**, **Vol Ladder** and **Decay Ladder**

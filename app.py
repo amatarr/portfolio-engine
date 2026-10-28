@@ -850,6 +850,8 @@ def _render_positions():
             else:
                 selected_position_indices.discard(position_index)
 
+        editor_state = st.session_state.get(editor_key, {})
+        edited_rows = editor_state.get("edited_rows", {})
         changed_quantities = False
         for row_index, quantity in enumerate(edited_table["Quantity"]):
             if pd.isna(quantity):
@@ -864,6 +866,17 @@ def _render_positions():
             leg_index = int(table.iloc[row_index]["_Leg"])
             position = st.session_state.portfolio.positions[position_index]
             leg = position.legs[leg_index] if isinstance(position, Structure) else position
+            if row_index in edited_rows or str(row_index) in edited_rows or quantity != leg.quantity:
+                logger.warning(
+                    "POSITION_QUANTITY_COMPARE editor_key=%s row_index=%d "
+                    "position_index=%d leg_index=%d returned=%s current=%s",
+                    editor_key,
+                    row_index,
+                    position_index,
+                    leg_index,
+                    quantity,
+                    leg.quantity,
+                )
             if quantity != leg.quantity:
                 previous_quantity = leg.quantity
                 logger.warning(
