@@ -1,3 +1,4 @@
+import logging
 import math
 import re
 import tempfile
@@ -54,6 +55,8 @@ from vol_calculator import (
     option_expiry_candidates,
     first_notice_date,
 )
+
+logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Vol Calculator", layout="wide")
 
@@ -429,8 +432,28 @@ def _autosave_portfolio():
             st.session_state.portfolio, _AUTOSAVE_PATH,
             position_meta=st.session_state.position_meta,
         )
+        logger.warning(
+            "PORTFOLIO_AUTOSAVE_SUCCEEDED position_count=%d",
+            len(st.session_state.portfolio.positions),
+        )
     except Exception:
-        pass
+        logger.exception("PORTFOLIO_AUTOSAVE_FAILED")
+
+
+def _log_position_editor_change(editor_key):
+    """Log only editable position fields while diagnosing data-editor events."""
+
+    editor_state = st.session_state.get(editor_key, {})
+    edited_rows = editor_state.get("edited_rows", {})
+    safe_edits = {
+        row_index: {
+            field: values[field]
+            for field in ("Quantity", "Remove")
+            if field in values
+        }
+        for row_index, values in edited_rows.items()
+    }
+    logger.warning("POSITION_EDITOR_EVENT key=%s edits=%r", editor_key, safe_edits)
 
 
 def _load_autosaved_portfolio():
@@ -733,11 +756,15 @@ def _render_positions():
     and TheoV follow the live prices without a full page rerun.
     """
 
+    selected_position_indices = st.session_state.setdefault("position_remove_selection", set())
     if not st.session_state.portfolio.positions:
+        selected_position_indices.clear()
         st.caption("No positions.")
         return
 
     meta = st.session_state.position_meta
+    valid_position_indices = set(range(len(st.session_state.portfolio.positions)))
+    selected_position_indices.intersection_update(valid_position_indices)
 
     for group_commodity in _commodities_present(meta):
 
@@ -747,7 +774,10 @@ def _render_positions():
             st.session_state.portfolio, meta, group_commodity, st.session_state.market,
         )
         editor_table = table.drop(columns=["#", "_Leg", "Expired"]).copy()
-        editor_table["Remove"] = False
+        position_indices = [int(position_index) for position_index in table["#"]]
+        editor_table["Remove"] = [
+            position_index in selected_position_indices for position_index in position_indices
+        ]
         editor_table["Expiry (d)"] = [
             "Expired" if expired else (str(int(days)) if pd.notna(days) else "None")
             for days, expired in zip(table["Expiry (d)"], table["Expired"])
@@ -770,7 +800,13 @@ def _render_positions():
             )
             for _, row in table.iterrows()
         )
-        editor_key = f"positions_editor_{group_commodity}_{hash(editor_key_rows)}"
+        selection_signature = tuple(editor_table["Remove"])
+        # Re-seed the editor from the persisted selection after checkbox-triggered
+        # fragment reruns.
+        editor_key = (
+            f"positions_editor_{group_commodity}_"
+            f"{hash((editor_key_rows, selection_signature))}"
+        )
         edited_table = st.data_editor(
             styled_editor_table,
             hide_index=True,
@@ -784,6 +820,8 @@ def _render_positions():
                 "Remove",
             ],
             key=editor_key,
+            on_change=_log_position_editor_change,
+            args=(editor_key,),
             column_config={
                 "Quantity": st.column_config.NumberColumn(
                     "Quantity",
@@ -806,6 +844,12 @@ def _render_positions():
             },
         )
 
+        for position_index, should_remove in zip(position_indices, edited_table["Remove"]):
+            if should_remove:
+                selected_position_indices.add(position_index)
+            else:
+                selected_position_indices.discard(position_index)
+
         changed_quantities = False
         for row_index, quantity in enumerate(edited_table["Quantity"]):
             if pd.isna(quantity):
@@ -821,18 +865,31 @@ def _render_positions():
             position = st.session_state.portfolio.positions[position_index]
             leg = position.legs[leg_index] if isinstance(position, Structure) else position
             if quantity != leg.quantity:
+                previous_quantity = leg.quantity
+                logger.warning(
+                    "POSITION_QUANTITY_UPDATE position_index=%d leg_index=%d "
+                    "previous=%s returned=%s",
+                    position_index,
+                    leg_index,
+                    previous_quantity,
+                    quantity,
+                )
                 leg.quantity = int(quantity) if quantity.is_integer() else quantity
+                logger.warning(
+                    "POSITION_QUANTITY_ASSIGNED position_index=%d leg_index=%d quantity=%s",
+                    position_index,
+                    leg_index,
+                    leg.quantity,
+                )
                 changed_quantities = True
 
         if changed_quantities:
             _autosave_portfolio()
             st.rerun(scope="app")
 
-        selected_positions = sorted({
-            int(table.iloc[row_index]["#"])
-            for row_index, should_remove in enumerate(edited_table["Remove"])
-            if should_remove
-        }, reverse=True)
+        selected_positions = sorted(
+            selected_position_indices.intersection(position_indices), reverse=True
+        )
 
         if selected_positions and st.button(
             f"Remove Selected ({len(selected_positions)} position(s))",
@@ -841,6 +898,7 @@ def _render_positions():
             for i in selected_positions:
                 st.session_state.portfolio.positions.pop(i)
                 st.session_state.position_meta.pop(i)
+            selected_position_indices.clear()
             _autosave_portfolio()
             st.rerun()
 
@@ -850,6 +908,9 @@ if "portfolio" not in st.session_state:
 
 if "position_meta" not in st.session_state:
     st.session_state.position_meta = []
+
+if "position_remove_selection" not in st.session_state:
+    st.session_state.position_remove_selection = set()
 
 # Expiry (d) follows the calendar: re-derived from each option's expiry
 # date on every run, so a leg added yesterday shows one day less today.
@@ -1104,6 +1165,7 @@ with st.container(border=True):
                     if st.button("Clear Portfolio"):
                         st.session_state.portfolio = Portfolio()
                         st.session_state.position_meta = []
+                        st.session_state.position_remove_selection.clear()
                         st.session_state.csv_locked_contracts = set()
                         _autosave_portfolio()
                         st.rerun()
@@ -1130,6 +1192,7 @@ with st.container(border=True):
                                 }
                                 for i, pos in enumerate(st.session_state.portfolio.positions)
                             ]
+                            st.session_state.position_remove_selection.clear()
                             _autosave_portfolio()
                             st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
                             st.rerun()
@@ -1314,6 +1377,7 @@ if _unpriced:
         keep_idx = [i for i, pos in enumerate(portfolio.positions) if pos.contract not in _still_unpriced]
         portfolio.positions = [portfolio.positions[i] for i in keep_idx]
         st.session_state.position_meta = [st.session_state.position_meta[i] for i in keep_idx]
+        st.session_state.position_remove_selection.clear()
         _autosave_portfolio()
         st.warning(
             f"Removed position(s) with no price available anywhere (not in the uploaded file "
