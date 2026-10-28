@@ -60,6 +60,8 @@ positions are removed or the portfolio is cleared or replaced. Temporary quantit
 write `POSITION_EDITOR_EVENT` and `POSITION_QUANTITY_COMPARE` (editor values versus stored position
 quantity), `POSITION_QUANTITY_UPDATE`, `POSITION_QUANTITY_ASSIGNED`, and `PORTFOLIO_AUTOSAVE_*`
 messages to the app logs; remove this instrumentation after the quantity revert issue is diagnosed.
+The positions editor key stays stable for the same rows, so toggling Remove does not remount the
+editor and discard its in-progress widget state.
 
 Analysis tabs compute only when opened, using the latest prices ("Prices as of" caption). **Greek
 Summary by Tenor** shows negatives in red. The **Price Ladder**, **Vol Ladder** and **Decay Ladder**

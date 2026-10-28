@@ -800,13 +800,8 @@ def _render_positions():
             )
             for _, row in table.iterrows()
         )
-        selection_signature = tuple(editor_table["Remove"])
-        # Re-seed the editor from the persisted selection after checkbox-triggered
-        # fragment reruns.
-        editor_key = (
-            f"positions_editor_{group_commodity}_"
-            f"{hash((editor_key_rows, selection_signature))}"
-        )
+        # Keep the widget mounted across quantity and selection edits.
+        editor_key = f"positions_editor_{group_commodity}_{hash(editor_key_rows)}"
         edited_table = st.data_editor(
             styled_editor_table,
             hide_index=True,
