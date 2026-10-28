@@ -47,9 +47,10 @@ The Market panel shows compact quote tables for the available commodities. Portf
 actions (clear, upload, import, and download) are grouped under the collapsed **Manage Portfolio**
 section to keep the Add Leg form and position data visible. The Add Leg form labels the position size
 as **Quantity**; its Underlying field is read-only (always the live price). Current Positions show
-short quantities in red and support direct quantity edits, which are autosaved and refresh analysis
-views. For structures, quantity edits apply to the selected leg; removing any selected structure leg
-removes the full structure. Strike and Expiry (d) display with no decimals; Entry Price, TheoV, and
+short quantities in red and support direct quantity edits, which are applied from the editor-change
+callback, autosaved, and refresh analysis views. For structures, quantity edits apply to the selected
+leg; removing any selected structure leg removes the full structure. Strike and Expiry (d) display
+with no decimals; Entry Price, TheoV, and
 Underlying Price display with two decimals, while Vol (%) retains its existing precision. The table
 also includes a First Notice column for futures (CBOT: last business day of the month before delivery).
 It refreshes every 5 seconds with live prices (Underlying Price, TheoV). Option expiries are stored

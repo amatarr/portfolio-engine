@@ -440,8 +440,8 @@ def _autosave_portfolio():
         logger.exception("PORTFOLIO_AUTOSAVE_FAILED")
 
 
-def _log_position_editor_change(editor_key):
-    """Log only editable position fields while diagnosing data-editor events."""
+def _handle_position_editor_change(editor_key, editor_row_map):
+    """Apply data-editor changes against the position rows used to render it."""
 
     editor_state = st.session_state.get(editor_key, {})
     edited_rows = editor_state.get("edited_rows", {})
@@ -454,6 +454,93 @@ def _log_position_editor_change(editor_key):
         for row_index, values in edited_rows.items()
     }
     logger.warning("POSITION_EDITOR_EVENT key=%s edits=%r", editor_key, safe_edits)
+
+    selected_positions = st.session_state.setdefault("position_remove_selection", set())
+    changed_quantities = False
+    for edited_row_index, values in edited_rows.items():
+        try:
+            row_index = int(edited_row_index)
+        except (TypeError, ValueError):
+            logger.warning(
+                "POSITION_EDITOR_INVALID_ROW key=%s row_index=%r",
+                editor_key,
+                edited_row_index,
+            )
+            continue
+        if row_index < 0 or row_index >= len(editor_row_map):
+            logger.warning(
+                "POSITION_EDITOR_ROW_OUT_OF_RANGE key=%s row_index=%d row_count=%d",
+                editor_key,
+                row_index,
+                len(editor_row_map),
+            )
+            continue
+
+        position_index, leg_index = editor_row_map[row_index]
+        if "Remove" in values:
+            if values["Remove"]:
+                selected_positions.add(position_index)
+            else:
+                selected_positions.discard(position_index)
+
+        if "Quantity" not in values:
+            continue
+
+        try:
+            quantity = float(values["Quantity"])
+        except (TypeError, ValueError):
+            logger.warning(
+                "POSITION_QUANTITY_INVALID position_index=%d leg_index=%d value=%r",
+                position_index,
+                leg_index,
+                values["Quantity"],
+            )
+            continue
+        if not math.isfinite(quantity):
+            logger.warning(
+                "POSITION_QUANTITY_INVALID position_index=%d leg_index=%d value=%r",
+                position_index,
+                leg_index,
+                values["Quantity"],
+            )
+            continue
+
+        position = st.session_state.portfolio.positions[position_index]
+        leg = position.legs[leg_index] if isinstance(position, Structure) else position
+        logger.warning(
+            "POSITION_QUANTITY_COMPARE editor_key=%s row_index=%d "
+            "position_index=%d leg_index=%d returned=%s current=%s",
+            editor_key,
+            row_index,
+            position_index,
+            leg_index,
+            quantity,
+            leg.quantity,
+        )
+        if quantity != leg.quantity:
+            previous_quantity = leg.quantity
+            logger.warning(
+                "POSITION_QUANTITY_UPDATE position_index=%d leg_index=%d "
+                "previous=%s returned=%s",
+                position_index,
+                leg_index,
+                previous_quantity,
+                quantity,
+            )
+            leg.quantity = int(quantity) if quantity.is_integer() else quantity
+            logger.warning(
+                "POSITION_QUANTITY_ASSIGNED position_index=%d leg_index=%d "
+                "previous=%s quantity=%s",
+                position_index,
+                leg_index,
+                previous_quantity,
+                leg.quantity,
+            )
+            changed_quantities = True
+
+    if changed_quantities:
+        _autosave_portfolio()
+        st.rerun(scope="app")
 
 
 def _load_autosaved_portfolio():
@@ -800,6 +887,10 @@ def _render_positions():
             )
             for _, row in table.iterrows()
         )
+        editor_row_map = tuple(
+            (int(row["#"]), int(row["_Leg"]))
+            for _, row in table.iterrows()
+        )
         # Keep the widget mounted across quantity and selection edits.
         editor_key = f"positions_editor_{group_commodity}_{hash(editor_key_rows)}"
         edited_table = st.data_editor(
@@ -815,8 +906,8 @@ def _render_positions():
                 "Remove",
             ],
             key=editor_key,
-            on_change=_log_position_editor_change,
-            args=(editor_key,),
+            on_change=_handle_position_editor_change,
+            args=(editor_key, editor_row_map),
             column_config={
                 "Quantity": st.column_config.NumberColumn(
                     "Quantity",
@@ -844,56 +935,6 @@ def _render_positions():
                 selected_position_indices.add(position_index)
             else:
                 selected_position_indices.discard(position_index)
-
-        editor_state = st.session_state.get(editor_key, {})
-        edited_rows = editor_state.get("edited_rows", {})
-        changed_quantities = False
-        for row_index, quantity in enumerate(edited_table["Quantity"]):
-            if pd.isna(quantity):
-                st.error("Position quantity cannot be blank.")
-                continue
-            quantity = float(quantity)
-            if not math.isfinite(quantity):
-                st.error("Position quantity must be a finite number.")
-                continue
-
-            position_index = int(table.iloc[row_index]["#"])
-            leg_index = int(table.iloc[row_index]["_Leg"])
-            position = st.session_state.portfolio.positions[position_index]
-            leg = position.legs[leg_index] if isinstance(position, Structure) else position
-            if row_index in edited_rows or str(row_index) in edited_rows or quantity != leg.quantity:
-                logger.warning(
-                    "POSITION_QUANTITY_COMPARE editor_key=%s row_index=%d "
-                    "position_index=%d leg_index=%d returned=%s current=%s",
-                    editor_key,
-                    row_index,
-                    position_index,
-                    leg_index,
-                    quantity,
-                    leg.quantity,
-                )
-            if quantity != leg.quantity:
-                previous_quantity = leg.quantity
-                logger.warning(
-                    "POSITION_QUANTITY_UPDATE position_index=%d leg_index=%d "
-                    "previous=%s returned=%s",
-                    position_index,
-                    leg_index,
-                    previous_quantity,
-                    quantity,
-                )
-                leg.quantity = int(quantity) if quantity.is_integer() else quantity
-                logger.warning(
-                    "POSITION_QUANTITY_ASSIGNED position_index=%d leg_index=%d quantity=%s",
-                    position_index,
-                    leg_index,
-                    leg.quantity,
-                )
-                changed_quantities = True
-
-        if changed_quantities:
-            _autosave_portfolio()
-            st.rerun(scope="app")
 
         selected_positions = sorted(
             selected_position_indices.intersection(position_indices), reverse=True
