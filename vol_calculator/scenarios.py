@@ -75,6 +75,36 @@ def spot_ladder(
     return pd.DataFrame(rows)
 
 
+def spot_ladder_by_underlying(portfolio, market, commodity, metric, low=-50, high=50, step=10):
+    """Return one selected price-ladder metric per underlying contract in a commodity."""
+
+    valid_metrics = {
+        "Futures Price", "PnL", "Portfolio Value", "Delta", "Gamma", "Theta", "Rho",
+        "Vega", "Volga", "Vanna-V",
+    }
+    if metric not in valid_metrics:
+        raise ValueError(f"Unknown price ladder metric: {metric}")
+
+    legs_by_contract = {}
+    for leg in _flatten_positions(portfolio.positions):
+        if commodity_from_contract(leg.contract, fallback=None) == commodity:
+            legs_by_contract.setdefault(leg.contract, []).append(leg)
+
+    rows = {}
+    for contract in sorted(legs_by_contract, key=_contract_sort_key):
+        contract_portfolio = Portfolio()
+        for leg in legs_by_contract[contract]:
+            contract_portfolio.add(leg)
+        ladder = spot_ladder(
+            contract_portfolio, market, contract=contract, low=low, high=high, step=step,
+            with_theta_rho=True,
+        )
+        rows[contract] = ladder[metric].tolist()
+
+    moves = list(range(low, high + step, step))
+    return pd.DataFrame.from_dict(rows, orient="index", columns=moves)
+
+
 def _portfolio_for_commodity(portfolio, commodity):
     filtered = Portfolio()
     for leg in _flatten_positions(portfolio.positions):
@@ -200,6 +230,36 @@ def commodity_vol_ladder(portfolio, market, commodity, low=-10, high=10, step=2,
     return pd.DataFrame(rows)
 
 
+def vol_ladder_by_underlying(portfolio, market, commodity, metric, low=-10, high=10, step=2):
+    """Return one selected volatility-ladder metric per underlying in a commodity."""
+
+    valid_metrics = {
+        "PnL", "Portfolio Value", "Delta", "Gamma", "Theta", "Rho", "Vega", "Volga",
+        "Vanna-D", "Vanna-V",
+    }
+    if metric not in valid_metrics:
+        raise ValueError(f"Unknown volatility ladder metric: {metric}")
+
+    legs_by_contract = {}
+    for leg in _flatten_positions(portfolio.positions):
+        if commodity_from_contract(leg.contract, fallback=None) == commodity:
+            legs_by_contract.setdefault(leg.contract, []).append(leg)
+
+    rows = {}
+    for contract in sorted(legs_by_contract, key=_contract_sort_key):
+        contract_portfolio = Portfolio()
+        for leg in legs_by_contract[contract]:
+            contract_portfolio.add(leg)
+        ladder = vol_ladder(
+            contract_portfolio, market, contract=contract, low=low, high=high, step=step,
+            with_theta_rho=True,
+        )
+        rows[contract] = ladder[metric].tolist()
+
+    shifts = list(range(low, high + step, step))
+    return pd.DataFrame.from_dict(rows, orient="index", columns=shifts)
+
+
 class _ExpiredOption:
     """
     An option leg past its expiry inside a decay scenario. In the money at
@@ -307,6 +367,34 @@ def commodity_decay_ladder(portfolio, market, commodity, horizon=60, step=5):
         })
 
     return pd.DataFrame(rows)
+
+
+def decay_ladder_by_underlying(portfolio, market, commodity, metric, horizon=60, step=5):
+    """Return one selected decay-ladder metric per underlying in a commodity."""
+
+    valid_metrics = {"PnL", "Portfolio Value", "Delta", "Gamma", "Theta", "Rho", "Vega"}
+    if metric not in valid_metrics:
+        raise ValueError(f"Unknown decay ladder metric: {metric}")
+
+    legs_by_contract = {}
+    for leg in _flatten_positions(portfolio.positions):
+        if commodity_from_contract(leg.contract, fallback=None) == commodity:
+            legs_by_contract.setdefault(leg.contract, []).append(leg)
+
+    rows = {}
+    for contract in sorted(legs_by_contract, key=_contract_sort_key):
+        contract_portfolio = Portfolio()
+        for leg in legs_by_contract[contract]:
+            contract_portfolio.add(leg)
+        ladder = decay_ladder(
+            contract_portfolio, market, contract=contract, horizon=horizon, step=step,
+        )
+        rows[contract] = ladder[metric].tolist()
+
+    days_list = list(range(0, horizon + 1, step))
+    if days_list[-1] != horizon:
+        days_list.append(horizon)
+    return pd.DataFrame.from_dict(rows, orient="index", columns=days_list)
 
 
 def spot_vol_surface(

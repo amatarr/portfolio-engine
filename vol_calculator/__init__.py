@@ -12,8 +12,11 @@ from vol_calculator.greeks import (
 )
 from vol_calculator.scenarios import (
     spot_ladder,
+    spot_ladder_by_underlying,
     vol_ladder,
+    vol_ladder_by_underlying,
     decay_ladder,
+    decay_ladder_by_underlying,
     commodity_spot_ladder,
     commodity_vol_ladder,
     commodity_decay_ladder,
@@ -102,8 +105,11 @@ __all__ = [
     "SPOT_BUMP",
     "PERCENT",
     "spot_ladder",
+    "spot_ladder_by_underlying",
     "vol_ladder",
+    "vol_ladder_by_underlying",
     "decay_ladder",
+    "decay_ladder_by_underlying",
     "commodity_spot_ladder",
     "commodity_vol_ladder",
     "commodity_decay_ladder",

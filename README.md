@@ -65,8 +65,11 @@ as individual underlying contracts. A commodity summary isolates that commodity'
 price or volatility shocks in parallel across its contracts; the decay summary advances only that
 commodity's positions through time. Price Ladder defaults are -20¢ to +20¢ in 2¢ steps, Vol Ladder
 defaults are -5 to +5 vol points in 1-point steps, and Decay Ladder defaults to a 30-day horizon in
-2-day steps. All values remain adjustable. Options expiring during decay are exercised if in the
-money, otherwise they lapse.
+2-day steps. All values remain adjustable. Each ladder includes an underlying comparison table with
+one row per active contract, selectable commodity and measure, and columns matching the ladder's
+scenario controls. A Total row sums the selected measure across underlyings; Futures Price in the
+Price Ladder has no meaningful total. Options expiring during decay are exercised if in the money,
+otherwise they lapse.
 
 ## Project layout
 
