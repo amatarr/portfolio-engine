@@ -222,6 +222,29 @@ def first_notice_date(contract):
     return _last_business_day(prior_year, prior_month)
 
 
+def last_trading_date(contract):
+    """
+    CBOT grain futures last trading day: the business day before the 15th
+    calendar day of the contract month -- e.g. "ZCZ26" -> 2026-12-14.
+    Weekends only, like first_notice_date. None if the code doesn't parse.
+    """
+
+    if not contract or len(contract) < 3:
+        return None
+
+    month_num = _CME_MONTH_TO_NUMBER.get(contract[-3])
+    year_part = contract[-2:]
+
+    if month_num is None or not year_part.isdigit():
+        return None
+
+    d = date(2000 + int(year_part), month_num, 15) - timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+
+    return d
+
+
 def approx_option_expiry_days(contract, today=None):
     """
     Rough stand-in for a grain option's real expiry date. CME's actual

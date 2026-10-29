@@ -3,7 +3,7 @@ QuantLib
 seaborn
 matplotlib
 scipy
-streamlit
+streamlit==1.64.0
 requests
 openpyxl
 supabase

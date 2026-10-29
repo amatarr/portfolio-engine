@@ -1,6 +1,6 @@
 import copy
 
-from vol_calculator.instruments import Portfolio
+from vol_calculator.instruments import Portfolio, Structure
 
 VOL_POINT = 0.01
 
@@ -23,6 +23,13 @@ def shift_portfolio_vols(portfolio, dv, contract=None):
     for pos in portfolio.positions:
         if contract is None or pos.contract == contract:
             shocked.add(pos.shift_vol(dv))
+        elif isinstance(pos, Structure):
+            # Legs on different contracts (e.g. a Dec/Mar calendar):
+            # shift only the legs on this contract.
+            shocked.add(Structure(
+                [leg.shift_vol(dv) if leg.contract == contract else leg for leg in pos.legs],
+                name=pos.name,
+            ))
         else:
             shocked.add(pos)
 

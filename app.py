@@ -1,3 +1,4 @@
+import io
 import logging
 import math
 import re
@@ -54,6 +55,7 @@ from vol_calculator import (
     daily_prop_as_of_date,
     option_expiry_candidates,
     first_notice_date,
+    last_trading_date,
 )
 
 logger = logging.getLogger(__name__)
@@ -243,7 +245,7 @@ LEG_BUILDERS = {
     },
     "Calendar Spread": {
         "defaults": {
-            "quantity": 1.0, "strike": 530.0, "near_expiry_days": 30,
+            "quantity": 1.0, "strike": 530.0, "far_strike": None, "near_expiry_days": 30,
             "far_expiry_days": 90, "option_type": "call",
             "vol_near": 0.20, "vol_far": 0.22,
         },
@@ -304,13 +306,20 @@ def _leg_row(
         except (KeyError, ValueError):
             underlying_price = stored_price
 
+        entry_price = future_entry_price if future_entry_price is not None else stored_price
+        # Days to the CBOT last trading day; display only, a future's value doesn't depend on time.
+        last_trade = last_trading_date(contract)
+        days_left = (last_trade - date.today()).days if last_trade else None
+
         return {
             "#": position_index, "_Leg": leg_index, "Contract": contract,
-            "Entry Price": future_entry_price if future_entry_price is not None else stored_price,
+            "Entry Price": entry_price,
             "Structure": structure, "Type": "Future",
-            "Quantity": leg.quantity, "Strike": None, "Expiry (d)": None,
+            "Quantity": leg.quantity, "Strike": None, "Expiry (d)": days_left,
             "First Notice": first_notice_date(contract), "Vol (%)": future_vol_pct,
-            "Underlying Price": underlying_price, "TheoV": underlying_price, "Expired": False,
+            "Underlying Price": underlying_price, "TheoV": underlying_price,
+            "Open P&L ($)": _open_pnl(underlying_price, entry_price, leg.quantity, market),
+            "Expired": days_left is not None and days_left < 0,
         }
 
     # Underlying Price/TheoV are always recomputed live from the
@@ -336,8 +345,23 @@ def _leg_row(
         "Type": "Call" if leg.option_type == "call" else "Put",
         "Quantity": leg.quantity, "Strike": leg.strike,
         "Expiry (d)": days_left, "First Notice": None, "Vol (%)": leg.volatility * 100,
-        "Underlying Price": underlying_price, "TheoV": mark_to_market, "Expired": days_left < 0,
+        "Underlying Price": underlying_price, "TheoV": mark_to_market,
+        # A structure's Entry Price is its net premium, not each leg's, so
+        # per-leg P&L isn't meaningful there.
+        "Open P&L ($)": (
+            _open_pnl(mark_to_market, entry_price, leg.quantity, market)
+            if structure == "-" and days_left >= 0 else None
+        ),
+        "Expired": days_left < 0,
     }
+
+
+def _open_pnl(theov, entry_price, quantity, market):
+    """(TheoV - Entry Price) x Quantity x $ per cent per contract."""
+
+    if theov is None or entry_price is None:
+        return None
+    return (theov - entry_price) * quantity * market.contract_multiplier
 
 
 def _positions_table_for_commodity(portfolio, meta, commodity, market):
@@ -357,7 +381,7 @@ def _positions_table_for_commodity(portfolio, meta, commodity, market):
         if isinstance(pos, Structure):
             structure = _structure_kind(pos.name)
             rows.extend(
-                _leg_row(leg, i, structure, contract, stored_price, market, leg_index=leg_index)
+                _leg_row(leg, i, structure, leg.contract or contract, stored_price, market, leg_index=leg_index)
                 for leg_index, leg in enumerate(pos.legs)
             )
         else:
@@ -368,6 +392,29 @@ def _positions_table_for_commodity(portfolio, meta, commodity, market):
             ))
 
     return pd.DataFrame(rows)
+
+
+def _position_contract(pos):
+    """A position's contract; a structure spanning two contracts (e.g. a Dec/Mar calendar) reports its first leg's."""
+
+    if pos.contract:
+        return pos.contract
+    if isinstance(pos, Structure) and pos.legs:
+        return pos.legs[0].contract
+    return None
+
+
+def _meta_for_loaded(portfolio, saved_meta):
+
+    return [
+        {
+            "commodity": _commodity_from_contract(_position_contract(pos)),
+            "contract": _position_contract(pos),
+            "vol_pct": None,
+            **saved_meta[i],
+        }
+        for i, pos in enumerate(portfolio.positions)
+    ]
 
 
 def _commodities_present(meta):
@@ -420,13 +467,122 @@ def _sync_expiries(portfolio):
     return changed
 
 
+_SAVED_PORTFOLIOS_TABLE = "saved_portfolios"
+_AUTOSAVE_NAME = "__autosave__"
+
+
+def _current_user():
+    return (st.session_state.get("app_user") or "").strip()
+
+
+@st.cache_resource
+def _supabase_client(url, anon_key):
+
+    from supabase import create_client
+
+    return create_client(url, anon_key)
+
+
+def _store_table():
+
+    client = _supabase_client(st.secrets["supabase_url"], st.secrets["supabase_anon_key"])
+    return client.table(_SAVED_PORTFOLIOS_TABLE)
+
+
+def _store_available():
+    """
+    Online saving needs the Supabase secrets and the saved_portfolios table
+    (supabase_saved_portfolios.sql). After a failure this session falls
+    back to the local file instead of retrying on every change.
+    """
+
+    return bool(
+        st.secrets.get("supabase_url") and st.secrets.get("supabase_anon_key")
+        and not st.session_state.get("store_down")
+    )
+
+
+def _portfolio_csv_text(portfolio, meta):
+
+    buffer = io.StringIO()
+    portfolio_to_csv(portfolio, buffer, position_meta=meta)
+    return buffer.getvalue()
+
+
+def _store_save(user, name, portfolio, meta):
+    """Upserts one saved portfolio. Returns False (and stops trying this session) on failure."""
+
+    try:
+        _store_table().upsert(
+            {
+                "user_name": user, "name": name,
+                "csv": _portfolio_csv_text(portfolio, meta),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="user_name,name",
+        ).execute()
+        return True
+    except Exception:
+        logger.exception("PORTFOLIO_STORE_SAVE_FAILED")
+        st.session_state.store_down = True
+        return False
+
+
+def _store_load(user, name):
+    """(portfolio, meta) for a saved portfolio, or None if there's no such save. Raises on connection errors."""
+
+    rows = _store_table().select("csv").eq("user_name", user).eq("name", name).limit(1).execute().data
+    if not rows:
+        return None
+    portfolio, saved_meta = portfolio_from_csv(io.StringIO(rows[0]["csv"]), return_meta=True)
+    return portfolio, _meta_for_loaded(portfolio, saved_meta)
+
+
+def _store_list(user=None):
+    """Named saves (not autosaves), newest first; one user's, or everyone's when user is None."""
+
+    query = _store_table().select("user_name,name,updated_at").neq("name", _AUTOSAVE_NAME)
+    if user:
+        query = query.eq("user_name", user)
+    return query.order("updated_at", desc=True).execute().data
+
+
+def _store_delete(user, name):
+    _store_table().delete().eq("user_name", user).eq("name", name).execute()
+
+
+def _switch_user():
+    """User changed at the top: remember it in the URL and switch to that user's own book."""
+
+    user = _current_user()
+    if user:
+        st.query_params["user"] = user
+    elif "user" in st.query_params:
+        del st.query_params["user"]
+
+    if _store_available():
+        st.session_state.portfolio, st.session_state.position_meta = _load_autosaved_portfolio()
+        st.session_state.position_remove_selection.clear()
+
+
 def _autosave_portfolio():
     """
-    Writes the current portfolio to disk so an accidental browser refresh
-    (which resets st.session_state) doesn't lose it. Not a real database --
-    just the last-known state, overwritten on every change.
+    Saves the current portfolio so an accidental browser refresh (which
+    resets st.session_state) doesn't lose it -- online under the user's
+    name when a user is set and Supabase is reachable, so each user keeps
+    their own book; otherwise to the local file. Overwritten on every change.
     """
     _sync_expiries(st.session_state.portfolio)
+    user = _current_user()
+    if user and _store_available() and _store_save(
+        user, _AUTOSAVE_NAME, st.session_state.portfolio, st.session_state.position_meta,
+    ):
+        logger.warning(
+            "PORTFOLIO_AUTOSAVE_SUCCEEDED user=%s position_count=%d",
+            user,
+            len(st.session_state.portfolio.positions),
+        )
+        return
     try:
         portfolio_to_csv(
             st.session_state.portfolio, _AUTOSAVE_PATH,
@@ -544,22 +700,23 @@ def _handle_position_editor_change(editor_key, editor_row_map):
 
 
 def _load_autosaved_portfolio():
+    """The user's own online autosave when a user is set and Supabase is reachable, else the local file."""
+
+    user = _current_user()
+    if user and _store_available():
+        try:
+            loaded = _store_load(user, _AUTOSAVE_NAME)
+            return loaded if loaded is not None else (_default_portfolio(), [])
+        except Exception:
+            logger.exception("PORTFOLIO_STORE_LOAD_FAILED")
+            st.session_state.store_down = True
 
     try:
         portfolio, saved_meta = portfolio_from_csv(_AUTOSAVE_PATH, return_meta=True)
     except FileNotFoundError:
         return _default_portfolio(), []
 
-    meta = [
-        {
-            "commodity": _commodity_from_contract(pos.contract),
-            "contract": pos.contract,
-            "vol_pct": None,
-            **saved_meta[i],
-        }
-        for i, pos in enumerate(portfolio.positions)
-    ]
-    return portfolio, meta
+    return portfolio, _meta_for_loaded(portfolio, saved_meta)
 
 
 def _commodity_from_contract(contract, fallback="Unknown"):
@@ -836,6 +993,73 @@ def _render_quotes_box():
                     st.session_state.market.futures_prices[code] = float(edited_price)
 
 
+def _render_saved_portfolios():
+    """Named portfolio saves per user (Supabase), alongside the always-on autosave."""
+
+    with st.container(key="saved_portfolios_box", border=True):
+        st.markdown("**Saved portfolios**")
+
+        user = _current_user()
+        if not user:
+            st.caption("Enter your name in **User** at the top to save portfolios online.")
+            return
+        if not _store_available():
+            st.caption(
+                "Online saving is unavailable (the saved_portfolios table may not be set up yet -- "
+                "see supabase_saved_portfolios.sql)."
+            )
+            return
+
+        name_col, save_col = st.columns([3, 1], vertical_alignment="bottom")
+        save_name = name_col.text_input(
+            "Save current portfolio as", key="save_portfolio_name", placeholder="e.g. Oct 29 book",
+        )
+        if save_col.button("Save", key="save_portfolio_btn"):
+            name = save_name.strip()
+            if not name or name == _AUTOSAVE_NAME:
+                st.error("Enter a name for this save.")
+            elif _store_save(user, name, st.session_state.portfolio, st.session_state.position_meta):
+                st.success(f"Saved '{name}'.")
+            else:
+                st.error("Save failed -- online saving is unavailable right now.")
+
+        show_all = st.checkbox("Show other users' portfolios", key="saved_show_all")
+        try:
+            rows = _store_list(None if show_all else user)
+        except Exception:
+            logger.exception("PORTFOLIO_STORE_LIST_FAILED")
+            st.caption("Could not load the saved portfolios list.")
+            return
+
+        if not rows:
+            st.caption("No saved portfolios yet.")
+            return
+
+        labels = {
+            (r["user_name"], r["name"]): f"{r['name']} -- {r['user_name']} ({str(r['updated_at'])[:16].replace('T', ' ')} UTC)"
+            for r in rows
+        }
+        choice = st.selectbox("Saved", list(labels), format_func=labels.get, key="saved_choice")
+
+        load_col, delete_col = st.columns(2)
+        if load_col.button("Load", key="load_saved_btn", help="Replaces the current portfolio."):
+            loaded = _store_load(*choice)
+            if loaded is not None:
+                st.session_state.portfolio, st.session_state.position_meta = loaded
+                st.session_state.position_remove_selection.clear()
+                _autosave_portfolio()
+                st.rerun()
+        if choice[0] == user and delete_col.button("Delete", key="delete_saved_btn"):
+            _store_delete(*choice)
+            st.rerun()
+
+
+def _pnl_font(v):
+    if not pd.api.types.is_number(v) or pd.isna(v) or not v:
+        return ""
+    return "color: #2e7d32" if v > 0 else "color: #d32f2f"
+
+
 @st.fragment(run_every="5s")
 def _render_positions():
     """
@@ -872,6 +1096,7 @@ def _render_positions():
         styled_editor_table = (
             editor_table.style
             .map(_red_if_negative, subset=["Quantity"])
+            .map(_pnl_font, subset=["Open P&L ($)"])
             .apply(
                 lambda row: (
                     ["color: #9e9e9e"] * len(row)
@@ -901,7 +1126,7 @@ def _render_positions():
             row_height=32,
             disabled=[column for column in editor_table.columns if column not in ("Quantity", "Remove")],
             column_order=[
-                "Contract", "Type", "Strike", "Quantity", "Entry Price", "TheoV",
+                "Contract", "Type", "Strike", "Quantity", "Entry Price", "TheoV", "Open P&L ($)",
                 "Underlying Price", "Structure", "Expiry (d)", "First Notice", "Vol (%)",
                 "Remove",
             ],
@@ -923,12 +1148,25 @@ def _render_positions():
                 "Strike": st.column_config.NumberColumn("Strike", format="%.0f"),
                 "Entry Price": st.column_config.NumberColumn("Entry Price", format="%.2f"),
                 "TheoV": st.column_config.NumberColumn("TheoV", format="%.2f"),
+                "Open P&L ($)": st.column_config.NumberColumn(
+                    "Open P&L ($)",
+                    help="(TheoV - Entry Price) x Quantity x $50 per cent. Blank for structure legs, "
+                    "whose Entry Price is the structure's net premium, and for expired options.",
+                    format="dollar",
+                ),
                 "Underlying Price": st.column_config.NumberColumn("Underlying Price", format="%.2f"),
                 "Expiry (d)": st.column_config.TextColumn("Expiry (d)"),
                 "Vol (%)": st.column_config.NumberColumn("Vol (%)", format="%.2f"),
                 "First Notice": st.column_config.DateColumn("First Notice", format="YYYY-MM-DD"),
             },
         )
+
+        open_pnl = pd.to_numeric(table["Open P&L ($)"], errors="coerce").dropna()
+        if len(open_pnl):
+            total = open_pnl.sum()
+            colour = "green" if total >= 0 else "red"
+            sign = "-" if total < 0 else ""
+            st.markdown(f"{group_commodity} open P&L: :{colour}[**{sign}\\${abs(total):,.0f}**]")
 
         for position_index, should_remove in zip(position_indices, edited_table["Remove"]):
             if should_remove:
@@ -951,6 +1189,10 @@ def _render_positions():
             _autosave_portfolio()
             st.rerun()
 
+
+# The user name lives in the URL (?user=...) so a refresh or bookmark keeps it.
+if "app_user" not in st.session_state:
+    st.session_state.app_user = st.query_params.get("user", "")
 
 if "portfolio" not in st.session_state:
     st.session_state.portfolio, st.session_state.position_meta = _load_autosaved_portfolio()
@@ -997,6 +1239,16 @@ if "market" not in st.session_state:
 
 
 st.title("Vol Calculator")
+
+_user_col, _user_note_col = st.columns([1, 4], vertical_alignment="bottom")
+_user_col.text_input(
+    "User", key="app_user", placeholder="Your name", on_change=_switch_user,
+    help="Your portfolio is saved online under this name, so each user keeps their own book.",
+)
+if not _current_user():
+    _user_note_col.caption("Enter your name to keep your own portfolio (saved online).")
+elif not _store_available():
+    _user_note_col.caption("Online saving unavailable -- this book is saved on this machine only.")
 
 with st.expander("Quick start -- how to use this tool", expanded=False):
     st.markdown(
@@ -1114,9 +1366,58 @@ with st.container(border=True):
                     c["days"] for c in expiry_candidates if c["label"] == chosen_label
                 )
 
+        # Calendar Spread: the far leg can sit on a later future of the same
+        # commodity (e.g. short Dec, long Mar), each leg priced off its own
+        # underlying and pre-filled with its own contract's option expiry.
+        is_calendar = leg_type == "Calendar Spread"
+        far_contract = None
+        far_underlying_price = None
+        calendar_expiry_defaults = {}
+        calendar_candidates = {}
+        if is_calendar and current_contract:
+
+            def _expiry_picker(label, contract, key, prefer_last):
+                candidates = option_expiry_candidates(contract)
+                calendar_candidates[contract] = candidates
+                if not candidates:
+                    return None
+                labels = [c["label"] for c in candidates]
+                standard = [i for i, text in enumerate(labels) if "(standard)" in text]
+                index = standard[0] if standard else (len(labels) - 1 if prefer_last else 0)
+                chosen = st.selectbox(label, labels, index=index, label_visibility="collapsed", key=key)
+                return next(c["days"] for c in candidates if c["label"] == chosen)
+
+            near_label_col, near_sel_col = st.columns([0.5, 2.5])
+            near_label_col.markdown("Near Expiry")
+            with near_sel_col:
+                calendar_expiry_defaults["near_expiry_days"] = _expiry_picker(
+                    "Near Expiry", current_contract, f"calendar_near_expiry_{current_contract}", prefer_last=False,
+                )
+
+            near_month = first_notice_date(current_contract) or date.min
+            later_contracts = sorted(
+                (c for c in commodity_contracts if (first_notice_date(c) or date.min) >= near_month),
+                key=lambda c: first_notice_date(c) or date.min,
+            )
+            far_label_col, far_sel_col, far_expiry_col = st.columns([0.5, 1.0, 1.5])
+            far_label_col.markdown("Far Contract")
+            far_contract = far_sel_col.selectbox(
+                "Far Contract", later_contracts, index=min(1, len(later_contracts) - 1),
+                label_visibility="collapsed", key=f"calendar_far_contract_{current_contract}",
+            )
+            far_underlying_price = st.session_state.market.futures_prices.get(far_contract)
+            with far_expiry_col:
+                calendar_expiry_defaults["far_expiry_days"] = _expiry_picker(
+                    "Far Expiry", far_contract, f"calendar_far_expiry_{far_contract}", prefer_last=True,
+                )
+            calendar_expiry_defaults = {k: v for k, v in calendar_expiry_defaults.items() if v is not None}
+
         with st.form(f"add_{leg_type}"):
 
-            n_cols = len(spec["defaults"]) + (2 if underlying_price is not None else 0)
+            n_cols = (
+                len(spec["defaults"]) + (2 if underlying_price is not None else 0)
+                + (1 if far_underlying_price is not None else 0)
+            )
             field_cols = st.columns(n_cols)
 
             kwargs = {}
@@ -1133,8 +1434,13 @@ with st.container(border=True):
                     # fill can differ from any suggestion.
                     default_expiry = chosen_expiry_days if chosen_expiry_days is not None else (auto_expiry or default)
                     kwargs[field] = int(col.number_input(field, value=int(default_expiry), step=1))
+                elif field == "far_strike":
+                    # Optional: left blank, the far leg uses the near strike (a plain calendar).
+                    kwargs[field] = col.number_input(
+                        "far_strike (optional)", value=None, step=1.0, placeholder="= strike",
+                    )
                 else:
-                    kwargs[field] = _render_field(col, field, default)
+                    kwargs[field] = _render_field(col, field, calendar_expiry_defaults.get(field, default))
 
                 if field == "quantity" and underlying_price is not None:
                     # Read-only: always the contract's live price. The price
@@ -1144,6 +1450,15 @@ with st.container(border=True):
                         key=f"underlying_display_{current_contract}_{underlying_price}",
                     )
                     col_idx += 1
+                    if far_underlying_price is not None:
+                        field_cols[col_idx].number_input(
+                            "Far Underlying", value=float(far_underlying_price), disabled=True,
+                            key=f"far_underlying_display_{far_contract}_{far_underlying_price}",
+                        )
+                        col_idx += 1
+
+            if is_calendar:
+                kwargs["far_contract"] = far_contract
 
             entry_price_input = None
             if is_future and underlying_price is not None:
@@ -1184,14 +1499,21 @@ with st.container(border=True):
                 try:
                     kwargs["contract"] = current_contract
                     instrument = spec["build"](**kwargs)
-                    option_month_by_days = {
-                        candidate["days"]: candidate.get("option_month")
+                    option_month_by_contract_days = {
+                        (current_contract, candidate["days"]): candidate.get("option_month")
                         for candidate in expiry_candidates
                     }
+                    for leg_contract, candidates in calendar_candidates.items():
+                        option_month_by_contract_days.update({
+                            (leg_contract, candidate["days"]): candidate.get("option_month")
+                            for candidate in candidates
+                        })
                     option_legs = instrument.legs if isinstance(instrument, Structure) else [instrument]
                     for option_leg in option_legs:
                         if isinstance(option_leg, AmericanOption):
-                            option_leg.option_month = option_month_by_days.get(option_leg.expiry_days)
+                            option_leg.option_month = option_month_by_contract_days.get(
+                                (option_leg.contract, option_leg.expiry_days)
+                            )
                     st.session_state.portfolio.add(instrument)
                     st.session_state.position_meta.append({
                         "commodity": _commodity_from_contract(current_contract),
@@ -1232,15 +1554,9 @@ with st.container(border=True):
                             st.session_state.portfolio, saved_meta = portfolio_from_csv(
                                 tmp_path, return_meta=True,
                             )
-                            st.session_state.position_meta = [
-                                {
-                                    "commodity": _commodity_from_contract(pos.contract),
-                                    "contract": pos.contract,
-                                    "vol_pct": None,
-                                    **saved_meta[i],
-                                }
-                                for i, pos in enumerate(st.session_state.portfolio.positions)
-                            ]
+                            st.session_state.position_meta = _meta_for_loaded(
+                                st.session_state.portfolio, saved_meta,
+                            )
                             st.session_state.position_remove_selection.clear()
                             _autosave_portfolio()
                             st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
@@ -1300,6 +1616,8 @@ with st.container(border=True):
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Import failed: {e}")
+
+            _render_saved_portfolios()
 
     st.divider()
     st.subheader("Current Positions")
@@ -1423,7 +1741,10 @@ if _unpriced:
             market.futures_prices[c] = _live_fallback[c]
 
     if _still_unpriced:
-        keep_idx = [i for i, pos in enumerate(portfolio.positions) if pos.contract not in _still_unpriced]
+        keep_idx = [
+            i for i, pos in enumerate(portfolio.positions)
+            if not any(leg.contract in _still_unpriced for leg in (pos.legs if isinstance(pos, Structure) else [pos]))
+        ]
         portfolio.positions = [portfolio.positions[i] for i in keep_idx]
         st.session_state.position_meta = [st.session_state.position_meta[i] for i in keep_idx]
         st.session_state.position_remove_selection.clear()
@@ -1432,6 +1753,24 @@ if _unpriced:
             f"Removed position(s) with no price available anywhere (not in the uploaded file "
             f"as a Future, and not live-quoted): {', '.join(sorted(_still_unpriced))}"
         )
+
+# Expired options stay in the book (greyed out in Current Positions) until
+# removed, but no longer count in the analysis tabs, which see the book
+# without them.
+def _is_expired_option(leg):
+    return isinstance(leg, AmericanOption) and _days_to_expiry(leg) < 0
+
+
+if any(_is_expired_option(leg) for leg in _option_legs(portfolio)):
+    _live_book = Portfolio()
+    for _pos in portfolio.positions:
+        if isinstance(_pos, Structure):
+            _legs = [leg for leg in _pos.legs if not _is_expired_option(leg)]
+            if _legs:
+                _live_book.add(Structure(_legs, name=_pos.name))
+        elif not _is_expired_option(_pos):
+            _live_book.add(_pos)
+    portfolio = _live_book
 
 # A closed tab doesn't render its inputs, and Streamlit forgets the state
 # of inputs that aren't rendered -- so each tab's settings are re-stored

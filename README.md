@@ -41,6 +41,17 @@ contract group to see the individual futures and option-expiry rows. Its column 
 and provide tooltips explaining each sensitivity and how the selected commodity affects the calculation
 scope.
 
+## Users and saved portfolios
+
+Type your name in **User** at the top of the app (it is kept in the URL as `?user=...`). Each user's
+portfolio is then autosaved online in Supabase under that name, so users no longer share one book and
+it survives redeploys. **Manage Portfolio > Saved portfolios** saves named copies, lists them (yours,
+or everyone's), and loads or deletes them. Without a user name, or if Supabase is unreachable, the app
+falls back to the local `_autosave_portfolio.csv`.
+
+One-time setup: run `supabase_saved_portfolios.sql` in the Supabase dashboard (SQL Editor). The app
+uses the existing `supabase_url` / `supabase_anon_key` secrets.
+
 ## Portfolio screen
 
 The Market panel shows compact quote tables for the available commodities. Portfolio management
@@ -52,7 +63,11 @@ callback, autosaved, and refresh analysis views. For structures, quantity edits 
 leg; removing any selected structure leg removes the full structure. Strike and Expiry (d) display
 with no decimals; Entry Price, TheoV, and
 Underlying Price display with two decimals, while Vol (%) retains its existing precision. The table
-also includes a First Notice column for futures (CBOT: last business day of the month before delivery).
+also includes a First Notice column for futures (CBOT: last business day of the month before delivery). Futures show Expiry (d) as days to the CBOT last trading day (the business day before the 15th
+of the contract month). An Open P&L ($) column shows (TheoV - Entry Price) x Quantity x $50, with a
+total per commodity; it is blank for structure legs and expired options. Expired options are left out
+of the analysis tabs. A Calendar Spread can put its far leg on a later contract of the same commodity
+(e.g. short Dec, long Mar), each leg priced off its own underlying, with an optional far strike.
 It refreshes every 5 seconds with live prices (Underlying Price, TheoV). Option expiries are stored
 as dates, so Expiry (d) counts down daily; expired options are greyed out until removed. Expiry values
 are rendered as text in the editable table so numeric day counts and the "Expired" label work

@@ -49,6 +49,7 @@ from vol_calculator.contracts import (
     commodity_from_contract,
     option_expiry_candidates,
     first_notice_date,
+    last_trading_date,
 )
 from vol_calculator.bushel_import import import_bushel_positions, latest_daily_prop_file, daily_prop_as_of_date
 from vol_calculator.excel_sync import (
@@ -140,6 +141,7 @@ __all__ = [
     "commodity_from_contract",
     "option_expiry_candidates",
     "first_notice_date",
+    "last_trading_date",
     "import_bushel_positions",
     "latest_daily_prop_file",
     "daily_prop_as_of_date",

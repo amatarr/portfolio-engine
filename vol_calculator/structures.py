@@ -208,11 +208,22 @@ def calendar_spread(
     option_type,
     vol_near,
     vol_far,
-    contract=None
+    contract=None,
+    far_contract=None,
+    far_strike=None
 ):
+    """
+    Short the near expiry, long the far one. The far leg can sit on a
+    different (later) future -- e.g. short Dec options on ZCZ26, long Mar
+    options on ZCH27 -- and at a different strike (a diagonal); both
+    default to the near leg's.
+    """
 
     if near_expiry_days >= far_expiry_days:
         raise ValueError("calendar_spread requires near_expiry_days < far_expiry_days")
+
+    far_contract = far_contract or contract
+    far_strike = strike if far_strike is None else far_strike
 
     legs = [
         AmericanOption(
@@ -225,17 +236,20 @@ def calendar_spread(
         ),
         AmericanOption(
             quantity=quantity,
-            strike=strike,
+            strike=far_strike,
             expiry_days=far_expiry_days,
             option_type=option_type,
             volatility=vol_far,
-            contract=contract
+            contract=far_contract
         ),
     ]
 
+    strikes = f"K={strike}" if far_strike == strike else f"K={strike}/{far_strike}"
+    contracts = f", {contract}/{far_contract}" if far_contract != contract else ""
+
     return Structure(
         legs,
-        name=f"CalendarSpread(qty={quantity}, K={strike}, days={near_expiry_days}/{far_expiry_days})"
+        name=f"CalendarSpread(qty={quantity}, {strikes}, days={near_expiry_days}/{far_expiry_days}{contracts})"
     )
 
 
