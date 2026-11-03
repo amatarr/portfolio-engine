@@ -210,11 +210,13 @@ def calendar_spread(
     vol_far,
     contract=None,
     far_contract=None,
-    far_strike=None
+    far_strike=None,
+    buy_near=False
 ):
     """
-    Short the near expiry, long the far one. The far leg can sit on a
-    different (later) future -- e.g. short Dec options on ZCZ26, long Mar
+    A positive quantity sells the near expiry and buys the far one, or
+    with buy_near buys the near and sells the far. The far leg can sit on
+    a different (later) future -- e.g. Dec options on ZCZ26 against Mar
     options on ZCH27 -- and at a different strike (a diagonal); both
     default to the near leg's.
     """
@@ -224,10 +226,11 @@ def calendar_spread(
 
     far_contract = far_contract or contract
     far_strike = strike if far_strike is None else far_strike
+    near_quantity = quantity if buy_near else -quantity
 
     legs = [
         AmericanOption(
-            quantity=-quantity,
+            quantity=near_quantity,
             strike=strike,
             expiry_days=near_expiry_days,
             option_type=option_type,
@@ -235,7 +238,7 @@ def calendar_spread(
             contract=contract
         ),
         AmericanOption(
-            quantity=quantity,
+            quantity=-near_quantity,
             strike=far_strike,
             expiry_days=far_expiry_days,
             option_type=option_type,

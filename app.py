@@ -206,6 +206,10 @@ LEG_BUILDERS = {
             "expiry_days": 64, "vol_long": 0.22, "vol_short": 0.20,
         },
         "build": lambda **kw: call_spread(**kw),
+        "leg_lines": [
+            ("Long", {"strike": "k_long", "vol": "vol_long"}),
+            ("Short", {"strike": "k_short", "vol": "vol_short"}),
+        ],
     },
     "Put Spread": {
         "defaults": {
@@ -213,6 +217,10 @@ LEG_BUILDERS = {
             "expiry_days": 64, "vol_long": 0.23, "vol_short": 0.25,
         },
         "build": lambda **kw: put_spread(**kw),
+        "leg_lines": [
+            ("Long", {"strike": "k_long", "vol": "vol_long"}),
+            ("Short", {"strike": "k_short", "vol": "vol_short"}),
+        ],
     },
     "Straddle": {
         "defaults": {
@@ -220,6 +228,10 @@ LEG_BUILDERS = {
             "vol_call": 0.21, "vol_put": 0.215,
         },
         "build": lambda **kw: straddle(**kw),
+        "leg_lines": [
+            ("Call", {"vol": "vol_call"}),
+            ("Put", {"vol": "vol_put"}),
+        ],
     },
     "Strangle": {
         "defaults": {
@@ -227,6 +239,10 @@ LEG_BUILDERS = {
             "expiry_days": 64, "vol_put": 0.24, "vol_call": 0.20,
         },
         "build": lambda **kw: strangle(**kw),
+        "leg_lines": [
+            ("Put", {"strike": "k_put", "vol": "vol_put"}),
+            ("Call", {"strike": "k_call", "vol": "vol_call"}),
+        ],
     },
     "Butterfly": {
         "defaults": {
@@ -235,6 +251,11 @@ LEG_BUILDERS = {
             "vol1": 0.24, "vol2": 0.21, "vol3": 0.19,
         },
         "build": lambda **kw: butterfly(**kw),
+        "leg_lines": [
+            ("Lower", {"strike": "k1", "vol": "vol1"}),
+            ("Middle", {"strike": "k2", "vol": "vol2"}),
+            ("Upper", {"strike": "k3", "vol": "vol3"}),
+        ],
     },
     "Collar": {
         "defaults": {
@@ -242,6 +263,10 @@ LEG_BUILDERS = {
             "expiry_days": 64, "vol_put": 0.24, "vol_call": 0.19,
         },
         "build": lambda **kw: collar(**kw),
+        "leg_lines": [
+            ("Put", {"quantity": "put_qty", "strike": "k_put", "vol": "vol_put"}),
+            ("Call", {"quantity": "call_qty", "strike": "k_call", "vol": "vol_call"}),
+        ],
     },
     "Calendar Spread": {
         "defaults": {
@@ -249,7 +274,11 @@ LEG_BUILDERS = {
             "far_expiry_days": 90, "option_type": "call",
             "vol_near": 0.20, "vol_far": 0.22,
         },
-        "build": lambda **kw: calendar_spread(**kw),
+        "build": lambda **kw: calendar_spread(**kw, buy_near=True),
+        "leg_lines": [
+            ("Near", {"strike": "strike", "expiry": "near_expiry_days", "vol": "vol_near"}),
+            ("Far", {"strike": "far_strike", "expiry": "far_expiry_days", "vol": "vol_far"}),
+        ],
     },
 }
 
@@ -271,6 +300,100 @@ def _render_field(container, name, default):
         return pct / 100
 
     return container.number_input(label, value=float(default), step=1.0)
+
+
+def _render_structure_fields(leg_type, spec, shared_defaults, underlyings, line_expiry_defaults):
+    """
+    The Add Leg box for a structure: fields shared by every leg on one line,
+    then one line per leg with its own Entry Price. underlyings is either
+    {None: (contract, price)} for one shared underlying or {leg label:
+    (contract, price)} per leg. Returns the builder's kwargs and each leg's
+    entered price, in the structure's own leg order.
+    """
+
+    kwargs = {}
+    defaults = spec["defaults"]
+    line_fields = {field for _, fields in spec["leg_lines"] for field in fields.values()}
+    shared_fields = [field for field in defaults if field not in line_fields]
+
+    def _underlying_input(col, contract, price, label_visibility="visible"):
+        # Read-only: always the contract's live price. The price is in the
+        # key so the field follows live quote updates.
+        col.number_input(
+            "Underlying", value=float(price), disabled=True, label_visibility=label_visibility,
+            key=f"underlying_display_{leg_type}_{contract}_{price}",
+        )
+
+    shared_underlying = underlyings.get(None)
+    shared_cols = st.columns(len(shared_fields) + (1 if shared_underlying else 0))
+    col_iter = iter(shared_cols)
+
+    if shared_underlying:
+        _underlying_input(next(col_iter), *shared_underlying)
+
+    for field in shared_fields:
+        col = next(col_iter)
+        default = shared_defaults.get(field, defaults[field])
+        key = f"leg_{leg_type}_{field}"
+        if field == "option_type":
+            options = ["call", "put"]
+            kwargs[field] = col.selectbox("Call/Put", options, index=options.index(default), key=key)
+        elif field == "expiry_days":
+            # The default is in the key so picking another suggested expiry updates it.
+            kwargs[field] = int(col.number_input("Expiry (d)", value=int(default), step=1, key=f"{key}_{default}"))
+        else:
+            kwargs[field] = col.number_input(field.capitalize(), value=float(default), step=1.0, key=key)
+
+    per_leg_underlying = any(label in underlyings for label, _ in spec["leg_lines"])
+    leg_entries = []
+
+    for line_index, (leg_label, fields) in enumerate(spec["leg_lines"]):
+        # Column titles show on the first line only, so the lines read like a table.
+        label_visibility = "visible" if line_index == 0 else "collapsed"
+        n_fields = len(fields) + 1 + (1 if per_leg_underlying else 0)
+        cols = iter(st.columns([0.6] + [1] * n_fields, vertical_alignment="bottom"))
+
+        next(cols).markdown(f"**{leg_label}**")
+
+        if leg_label in underlyings:
+            _underlying_input(next(cols), *underlyings[leg_label], label_visibility=label_visibility)
+
+        for kind, field in fields.items():
+            col = next(cols)
+            default = defaults[field]
+            key = f"leg_{leg_type}_{field}"
+            if kind == "quantity":
+                kwargs[field] = col.number_input(
+                    "Quantity", value=float(default), step=1.0, key=key, label_visibility=label_visibility,
+                )
+            elif kind == "strike" and default is None:
+                # Optional: left blank, this leg uses the first leg's strike.
+                kwargs[field] = col.number_input(
+                    "Strike", value=None, step=1.0, placeholder="= near", key=key, label_visibility=label_visibility,
+                )
+            elif kind == "strike":
+                kwargs[field] = col.number_input(
+                    "Strike", value=float(default), step=1.0, key=key, label_visibility=label_visibility,
+                )
+            elif kind == "expiry":
+                expiry = line_expiry_defaults.get(field, default)
+                kwargs[field] = int(col.number_input(
+                    "Expiry (d)", value=int(expiry), step=1, key=f"{key}_{expiry}", label_visibility=label_visibility,
+                ))
+            else:
+                kwargs[field] = col.number_input(
+                    "Vol (%)", value=float(default) * 100, step=0.1, format="%.2f",
+                    key=key, label_visibility=label_visibility,
+                ) / 100
+
+        # Blank is filled with the leg's own TheoV when it's added, using
+        # the strike and vol actually submitted.
+        leg_entries.append(next(cols).number_input(
+            "Entry Price", value=None, step=0.25, placeholder="TheoV",
+            key=f"leg_{leg_type}_{leg_label}_entry", label_visibility=label_visibility,
+        ))
+
+    return kwargs, leg_entries
 
 
 def _leg_label(pos):
@@ -318,7 +441,6 @@ def _leg_row(
             "Quantity": leg.quantity, "Strike": None, "Expiry (d)": days_left,
             "First Notice": first_notice_date(contract), "Vol (%)": future_vol_pct,
             "Underlying Price": underlying_price, "TheoV": underlying_price,
-            "Open P&L ($)": _open_pnl(underlying_price, entry_price, leg.quantity, market),
             "Expired": days_left is not None and days_left < 0,
         }
 
@@ -335,7 +457,9 @@ def _leg_row(
     # No recorded Entry Price (e.g. a Daily Prop row with a blank
     # settlement, or a manual leg added before this existed) -- Mark to
     # Market is the best available stand-in, not a blank cell.
-    entry_price = stored_price if stored_price is not None else mark_to_market
+    entry_price = leg.entry_price if leg.entry_price is not None else stored_price
+    if entry_price is None:
+        entry_price = mark_to_market
 
     days_left = _days_to_expiry(leg)
 
@@ -346,22 +470,8 @@ def _leg_row(
         "Quantity": leg.quantity, "Strike": leg.strike,
         "Expiry (d)": days_left, "First Notice": None, "Vol (%)": leg.volatility * 100,
         "Underlying Price": underlying_price, "TheoV": mark_to_market,
-        # A structure's Entry Price is its net premium, not each leg's, so
-        # per-leg P&L isn't meaningful there.
-        "Open P&L ($)": (
-            _open_pnl(mark_to_market, entry_price, leg.quantity, market)
-            if structure == "-" and days_left >= 0 else None
-        ),
         "Expired": days_left < 0,
     }
-
-
-def _open_pnl(theov, entry_price, quantity, market):
-    """(TheoV - Entry Price) x Quantity x $ per cent per contract."""
-
-    if theov is None or entry_price is None:
-        return None
-    return (theov - entry_price) * quantity * market.contract_multiplier
 
 
 def _positions_table_for_commodity(portfolio, meta, commodity, market):
@@ -1054,12 +1164,6 @@ def _render_saved_portfolios():
             st.rerun()
 
 
-def _pnl_font(v):
-    if not pd.api.types.is_number(v) or pd.isna(v) or not v:
-        return ""
-    return "color: #2e7d32" if v > 0 else "color: #d32f2f"
-
-
 @st.fragment(run_every="5s")
 def _render_positions():
     """
@@ -1096,7 +1200,6 @@ def _render_positions():
         styled_editor_table = (
             editor_table.style
             .map(_red_if_negative, subset=["Quantity"])
-            .map(_pnl_font, subset=["Open P&L ($)"])
             .apply(
                 lambda row: (
                     ["color: #9e9e9e"] * len(row)
@@ -1126,7 +1229,7 @@ def _render_positions():
             row_height=32,
             disabled=[column for column in editor_table.columns if column not in ("Quantity", "Remove")],
             column_order=[
-                "Contract", "Type", "Strike", "Quantity", "Entry Price", "TheoV", "Open P&L ($)",
+                "Contract", "Type", "Strike", "Quantity", "Entry Price", "TheoV",
                 "Underlying Price", "Structure", "Expiry (d)", "First Notice", "Vol (%)",
                 "Remove",
             ],
@@ -1148,25 +1251,12 @@ def _render_positions():
                 "Strike": st.column_config.NumberColumn("Strike", format="%.0f"),
                 "Entry Price": st.column_config.NumberColumn("Entry Price", format="%.2f"),
                 "TheoV": st.column_config.NumberColumn("TheoV", format="%.2f"),
-                "Open P&L ($)": st.column_config.NumberColumn(
-                    "Open P&L ($)",
-                    help="(TheoV - Entry Price) x Quantity x $50 per cent. Blank for structure legs, "
-                    "whose Entry Price is the structure's net premium, and for expired options.",
-                    format="dollar",
-                ),
                 "Underlying Price": st.column_config.NumberColumn("Underlying Price", format="%.2f"),
                 "Expiry (d)": st.column_config.TextColumn("Expiry (d)"),
                 "Vol (%)": st.column_config.NumberColumn("Vol (%)", format="%.2f"),
                 "First Notice": st.column_config.DateColumn("First Notice", format="YYYY-MM-DD"),
             },
         )
-
-        open_pnl = pd.to_numeric(table["Open P&L ($)"], errors="coerce").dropna()
-        if len(open_pnl):
-            total = open_pnl.sum()
-            colour = "green" if total >= 0 else "red"
-            sign = "-" if total < 0 else ""
-            st.markdown(f"{group_commodity} open P&L: :{colour}[**{sign}\\${abs(total):,.0f}**]")
 
         for position_index, should_remove in zip(position_indices, edited_table["Remove"]):
             if should_remove:
@@ -1323,9 +1413,12 @@ with st.container(border=True):
             "Type", list(LEG_BUILDERS.keys()), label_visibility="collapsed"
         )
         spec = LEG_BUILDERS[leg_type]
+        is_calendar = leg_type == "Calendar Spread"
+        is_structure = "leg_lines" in spec
 
         comm_label_col.markdown("Commodity")
-        contract_label_col.markdown("Contract")
+        if not is_calendar:
+            contract_label_col.markdown("Contract")
 
         if not commodities_with_contracts:
             comm_sel_col.warning("None yet")
@@ -1339,9 +1432,18 @@ with st.container(border=True):
             )
             commodity_contracts = contracts_by_commodity[selected_commodity]
 
-            current_contract = contract_sel_col.selectbox(
-                "Contract", commodity_contracts, label_visibility="collapsed",
-            )
+            if is_calendar:
+                # One line per leg: Near contract + expiry, then Far contract + expiry.
+                near_label_col, near_contract_col, near_expiry_col = st.columns([0.5, 1.0, 1.5])
+                near_label_col.markdown("**Near**")
+                current_contract = near_contract_col.selectbox(
+                    "Near Contract", commodity_contracts, label_visibility="collapsed",
+                    key=f"calendar_near_contract_{selected_commodity}",
+                )
+            else:
+                current_contract = contract_sel_col.selectbox(
+                    "Contract", commodity_contracts, label_visibility="collapsed",
+                )
             underlying_price = st.session_state.market.futures_prices.get(current_contract)
             auto_expiry = approx_option_expiry_days(current_contract)
 
@@ -1367,9 +1469,8 @@ with st.container(border=True):
                 )
 
         # Calendar Spread: the far leg can sit on a later future of the same
-        # commodity (e.g. short Dec, long Mar), each leg priced off its own
+        # commodity (e.g. Dec against Mar), each leg priced off its own
         # underlying and pre-filled with its own contract's option expiry.
-        is_calendar = leg_type == "Calendar Spread"
         far_contract = None
         far_underlying_price = None
         calendar_expiry_defaults = {}
@@ -1387,9 +1488,7 @@ with st.container(border=True):
                 chosen = st.selectbox(label, labels, index=index, label_visibility="collapsed", key=key)
                 return next(c["days"] for c in candidates if c["label"] == chosen)
 
-            near_label_col, near_sel_col = st.columns([0.5, 2.5])
-            near_label_col.markdown("Near Expiry")
-            with near_sel_col:
+            with near_expiry_col:
                 calendar_expiry_defaults["near_expiry_days"] = _expiry_picker(
                     "Near Expiry", current_contract, f"calendar_near_expiry_{current_contract}", prefer_last=False,
                 )
@@ -1400,7 +1499,7 @@ with st.container(border=True):
                 key=lambda c: first_notice_date(c) or date.min,
             )
             far_label_col, far_sel_col, far_expiry_col = st.columns([0.5, 1.0, 1.5])
-            far_label_col.markdown("Far Contract")
+            far_label_col.markdown("**Far**")
             far_contract = far_sel_col.selectbox(
                 "Far Contract", later_contracts, index=min(1, len(later_contracts) - 1),
                 label_visibility="collapsed", key=f"calendar_far_contract_{current_contract}",
@@ -1411,63 +1510,76 @@ with st.container(border=True):
                     "Far Expiry", far_contract, f"calendar_far_expiry_{far_contract}", prefer_last=True,
                 )
             calendar_expiry_defaults = {k: v for k, v in calendar_expiry_defaults.items() if v is not None}
+            st.caption("Long 1 = buy near, sell far. Use a negative quantity for the reverse.")
 
         with st.form(f"add_{leg_type}"):
 
-            n_cols = (
-                len(spec["defaults"]) + (2 if underlying_price is not None else 0)
-                + (1 if far_underlying_price is not None else 0)
-            )
-            field_cols = st.columns(n_cols)
-
             kwargs = {}
-            col_idx = 0
-            for field, default in spec["defaults"].items():
-                col = field_cols[col_idx]
-                col_idx += 1
+            leg_entries = []
+            entry_price_input = None
 
-                if field == "expiry_days":
-                    # Pre-filled from the chosen suggestion above (real
-                    # CME standard/serial expiry) if one exists, else the
-                    # old rough estimate -- either way, still a normal
-                    # editable field, never disabled, since the exact
-                    # fill can differ from any suggestion.
-                    default_expiry = chosen_expiry_days if chosen_expiry_days is not None else (auto_expiry or default)
-                    kwargs[field] = int(col.number_input(field, value=int(default_expiry), step=1))
-                elif field == "far_strike":
-                    # Optional: left blank, the far leg uses the near strike (a plain calendar).
-                    kwargs[field] = col.number_input(
-                        "far_strike (optional)", value=None, step=1.0, placeholder="= strike",
+            if is_structure:
+                # Pre-filled from the chosen suggestion above (real CME
+                # standard/serial expiry) if one exists, else the rough
+                # estimate -- still a normal editable field either way.
+                shared_defaults = {}
+                if "expiry_days" in spec["defaults"]:
+                    shared_defaults["expiry_days"] = (
+                        chosen_expiry_days if chosen_expiry_days is not None
+                        else (auto_expiry or spec["defaults"]["expiry_days"])
                     )
-                else:
-                    kwargs[field] = _render_field(col, field, calendar_expiry_defaults.get(field, default))
 
-                if field == "quantity" and underlying_price is not None:
-                    # Read-only: always the contract's live price. The price
-                    # is in the key so the field follows live quote updates.
-                    field_cols[col_idx].number_input(
-                        "Underlying", value=float(underlying_price), disabled=True,
-                        key=f"underlying_display_{current_contract}_{underlying_price}",
-                    )
-                    col_idx += 1
+                underlyings = {}
+                if is_calendar:
+                    if underlying_price is not None:
+                        underlyings["Near"] = (current_contract, underlying_price)
                     if far_underlying_price is not None:
+                        underlyings["Far"] = (far_contract, far_underlying_price)
+                elif underlying_price is not None:
+                    underlyings[None] = (current_contract, underlying_price)
+
+                kwargs, leg_entries = _render_structure_fields(
+                    leg_type, spec, shared_defaults, underlyings, calendar_expiry_defaults,
+                )
+                if is_calendar:
+                    kwargs["far_contract"] = far_contract
+
+            else:
+                n_cols = len(spec["defaults"]) + (2 if underlying_price is not None else 0)
+                field_cols = st.columns(n_cols)
+
+                col_idx = 0
+                for field, default in spec["defaults"].items():
+                    col = field_cols[col_idx]
+                    col_idx += 1
+
+                    if field == "expiry_days":
+                        # Pre-filled from the chosen suggestion above (real
+                        # CME standard/serial expiry) if one exists, else the
+                        # old rough estimate -- either way, still a normal
+                        # editable field, never disabled, since the exact
+                        # fill can differ from any suggestion.
+                        default_expiry = chosen_expiry_days if chosen_expiry_days is not None else (auto_expiry or default)
+                        kwargs[field] = int(col.number_input(field, value=int(default_expiry), step=1))
+                    else:
+                        kwargs[field] = _render_field(col, field, default)
+
+                    if field == "quantity" and underlying_price is not None:
+                        # Read-only: always the contract's live price. The price
+                        # is in the key so the field follows live quote updates.
                         field_cols[col_idx].number_input(
-                            "Far Underlying", value=float(far_underlying_price), disabled=True,
-                            key=f"far_underlying_display_{far_contract}_{far_underlying_price}",
+                            "Underlying", value=float(underlying_price), disabled=True,
+                            key=f"underlying_display_{current_contract}_{underlying_price}",
                         )
                         col_idx += 1
 
-            if is_calendar:
-                kwargs["far_contract"] = far_contract
-
-            entry_price_input = None
             if is_future and underlying_price is not None:
                 entry_price_input = field_cols[col_idx].number_input(
                     "Entry Price", value=float(underlying_price),
                     key=f"future_entry_price_input_{current_contract}",
                 )
                 col_idx += 1
-            elif not is_future and underlying_price is not None:
+            elif not is_future and not is_structure and underlying_price is not None:
                 # Entry Price only applies to options -- what you actually
                 # paid/received for the premium, a fixed number you type in
                 # and that never gets recalculated. Pre-filled with this
@@ -1514,6 +1626,13 @@ with st.container(border=True):
                             option_leg.option_month = option_month_by_contract_days.get(
                                 (option_leg.contract, option_leg.expiry_days)
                             )
+                    for option_leg, leg_entry in zip(option_legs, leg_entries):
+                        option_leg.entry_price = (
+                            leg_entry if leg_entry is not None
+                            else compute_model_price(
+                                option_leg, {"contract": option_leg.contract}, st.session_state.market,
+                            )
+                        )
                     st.session_state.portfolio.add(instrument)
                     st.session_state.position_meta.append({
                         "commodity": _commodity_from_contract(current_contract),

@@ -48,7 +48,8 @@ def portfolio_to_csv(portfolio, path, position_meta=None):
 
             for leg in pos.legs:
                 row = _leg_to_row(leg, structure_id, pos.name or "")
-                row["entry_price"] = entry_price
+                leg_entry_price = getattr(leg, "entry_price", None)
+                row["entry_price"] = leg_entry_price if leg_entry_price is not None else entry_price
                 row["underlying_price"] = underlying_price
                 rows.append(row)
 
@@ -140,6 +141,10 @@ def portfolio_from_csv(path, return_meta=False):
             open_structures[sid] = structure
             portfolio.add(structure)
             position_meta.append(meta)
+
+        # Each structure row holds that leg's own entry price.
+        if isinstance(leg, AmericanOption) and saved_entry_price:
+            leg.entry_price = float(saved_entry_price)
 
         open_structures[sid].legs.append(leg)
 

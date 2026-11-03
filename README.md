@@ -64,10 +64,11 @@ leg; removing any selected structure leg removes the full structure. Strike and 
 with no decimals; Entry Price, TheoV, and
 Underlying Price display with two decimals, while Vol (%) retains its existing precision. The table
 also includes a First Notice column for futures (CBOT: last business day of the month before delivery). Futures show Expiry (d) as days to the CBOT last trading day (the business day before the 15th
-of the contract month). An Open P&L ($) column shows (TheoV - Entry Price) x Quantity x $50, with a
-total per commodity; it is blank for structure legs and expired options. Expired options are left out
-of the analysis tabs. A Calendar Spread can put its far leg on a later contract of the same commodity
-(e.g. short Dec, long Mar), each leg priced off its own underlying, with an optional far strike.
+of the contract month). Expired options are left out of the analysis tabs. A Calendar Spread can put its far leg on a later
+contract of the same commodity (e.g. Dec against Mar), each leg priced off its own underlying,
+with an optional far strike. In the app, long 1 calendar means buy near, sell far; the Excel workbook's
+Add Leg still sells near and buys far. In Add Leg, structures show one line per leg, each with its own Entry
+Price; left blank, it is filled with that leg's TheoV when the structure is added.
 It refreshes every 5 seconds with live prices (Underlying Price, TheoV). Option expiries are stored
 as dates, so Expiry (d) counts down daily; expired options are greyed out until removed. Expiry values
 are rendered as text in the editable table so numeric day counts and the "Expired" label work

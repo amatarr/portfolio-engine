@@ -59,6 +59,7 @@ class AmericanOption:
         contract=None,
         option_month=None,
         expiry_date=None,
+        entry_price=None,
     ):
         self.quantity = quantity
         self.strike = strike
@@ -70,6 +71,9 @@ class AmericanOption:
         # Calendar expiry date, when known. Pricing only uses expiry_days;
         # the Streamlit app re-derives expiry_days from this date each day.
         self.expiry_date = expiry_date
+        # What this leg was actually traded at, when entered per leg (the
+        # legs of a structure). Never used for pricing.
+        self.entry_price = entry_price
 
     def price(self, market):
 
