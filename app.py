@@ -714,7 +714,7 @@ def _handle_position_editor_change(editor_key, editor_row_map):
     safe_edits = {
         row_index: {
             field: values[field]
-            for field in ("Quantity", "Remove")
+            for field in ("Quantity", "Entry Price", "Underlying Price", "Remove")
             if field in values
         }
         for row_index, values in edited_rows.items()
@@ -722,7 +722,8 @@ def _handle_position_editor_change(editor_key, editor_row_map):
     logger.warning("POSITION_EDITOR_EVENT key=%s edits=%r", editor_key, safe_edits)
 
     selected_positions = st.session_state.setdefault("position_remove_selection", set())
-    changed_quantities = False
+    changed_positions = False
+    changed_market = False
     for edited_row_index, values in edited_rows.items():
         try:
             row_index = int(edited_row_index)
@@ -742,70 +743,113 @@ def _handle_position_editor_change(editor_key, editor_row_map):
             )
             continue
 
-        position_index, leg_index = editor_row_map[row_index]
+        position_index, leg_index, contract = editor_row_map[row_index]
         if "Remove" in values:
             if values["Remove"]:
                 selected_positions.add(position_index)
             else:
                 selected_positions.discard(position_index)
 
-        if "Quantity" not in values:
-            continue
-
-        try:
-            quantity = float(values["Quantity"])
-        except (TypeError, ValueError):
-            logger.warning(
-                "POSITION_QUANTITY_INVALID position_index=%d leg_index=%d value=%r",
-                position_index,
-                leg_index,
-                values["Quantity"],
-            )
-            continue
-        if not math.isfinite(quantity):
-            logger.warning(
-                "POSITION_QUANTITY_INVALID position_index=%d leg_index=%d value=%r",
-                position_index,
-                leg_index,
-                values["Quantity"],
-            )
-            continue
-
         position = st.session_state.portfolio.positions[position_index]
         leg = position.legs[leg_index] if isinstance(position, Structure) else position
-        logger.warning(
-            "POSITION_QUANTITY_COMPARE editor_key=%s row_index=%d "
-            "position_index=%d leg_index=%d returned=%s current=%s",
-            editor_key,
-            row_index,
-            position_index,
-            leg_index,
-            quantity,
-            leg.quantity,
-        )
-        if quantity != leg.quantity:
-            previous_quantity = leg.quantity
-            logger.warning(
-                "POSITION_QUANTITY_UPDATE position_index=%d leg_index=%d "
-                "previous=%s returned=%s",
-                position_index,
-                leg_index,
-                previous_quantity,
-                quantity,
-            )
-            leg.quantity = int(quantity) if quantity.is_integer() else quantity
-            logger.warning(
-                "POSITION_QUANTITY_ASSIGNED position_index=%d leg_index=%d "
-                "previous=%s quantity=%s",
-                position_index,
-                leg_index,
-                previous_quantity,
-                leg.quantity,
-            )
-            changed_quantities = True
+        if "Quantity" in values:
+            try:
+                quantity = float(values["Quantity"])
+            except (TypeError, ValueError):
+                quantity = None
+            if quantity is None or not math.isfinite(quantity):
+                logger.warning(
+                    "POSITION_QUANTITY_INVALID position_index=%d leg_index=%d value=%r",
+                    position_index,
+                    leg_index,
+                    values["Quantity"],
+                )
+            elif quantity != leg.quantity:
+                logger.warning(
+                    "POSITION_QUANTITY_COMPARE editor_key=%s row_index=%d "
+                    "position_index=%d leg_index=%d returned=%s current=%s",
+                    editor_key,
+                    row_index,
+                    position_index,
+                    leg_index,
+                    quantity,
+                    leg.quantity,
+                )
+                previous_quantity = leg.quantity
+                logger.warning(
+                    "POSITION_QUANTITY_UPDATE position_index=%d leg_index=%d "
+                    "previous=%s returned=%s",
+                    position_index,
+                    leg_index,
+                    previous_quantity,
+                    quantity,
+                )
+                leg.quantity = int(quantity) if quantity.is_integer() else quantity
+                logger.warning(
+                    "POSITION_QUANTITY_ASSIGNED position_index=%d leg_index=%d "
+                    "previous=%s quantity=%s",
+                    position_index,
+                    leg_index,
+                    previous_quantity,
+                    leg.quantity,
+                )
+                changed_positions = True
 
-    if changed_quantities:
+        if "Entry Price" in values:
+            try:
+                entry_price = float(values["Entry Price"])
+            except (TypeError, ValueError):
+                entry_price = None
+            if entry_price is None or not math.isfinite(entry_price):
+                logger.warning(
+                    "POSITION_ENTRY_PRICE_INVALID position_index=%d leg_index=%d value=%r",
+                    position_index,
+                    leg_index,
+                    values["Entry Price"],
+                )
+            else:
+                meta = st.session_state.position_meta[position_index]
+                if isinstance(leg, Future):
+                    if meta.get("entry_price") != entry_price:
+                        meta["entry_price"] = entry_price
+                        changed_positions = True
+                elif isinstance(leg, AmericanOption):
+                    if leg.entry_price != entry_price:
+                        leg.entry_price = entry_price
+                        changed_positions = True
+                    if not isinstance(position, Structure) and meta.get("settlement_price") != entry_price:
+                        meta["settlement_price"] = entry_price
+                        changed_positions = True
+
+        if "Underlying Price" in values:
+            try:
+                underlying_price = float(values["Underlying Price"])
+            except (TypeError, ValueError):
+                underlying_price = None
+            if (
+                underlying_price is None
+                or not math.isfinite(underlying_price)
+                or not contract
+                or contract == "-"
+            ):
+                logger.warning(
+                    "POSITION_UNDERLYING_PRICE_INVALID contract=%s value=%r",
+                    contract,
+                    values["Underlying Price"],
+                )
+            elif st.session_state.market.futures_prices.get(contract) != underlying_price:
+                st.session_state.market.futures_prices[contract] = underlying_price
+                live_quote_price = st.session_state.get("live_quote_prices", {}).get(contract)
+                if live_quote_price is not None:
+                    st.session_state.setdefault("position_price_overrides", {})[contract] = {
+                        "price": underlying_price,
+                        "feed_price": float(live_quote_price),
+                    }
+                changed_market = True
+
+    if changed_positions:
         _autosave_portfolio()
+    if changed_positions or changed_market:
         st.rerun(scope="app")
 
 
@@ -1028,6 +1072,8 @@ def _render_quotes_box():
 
     live_quotes = _load_live_quotes()
     quote_price_lookup = {q["contract"]: q["price"] for q in live_quotes}
+    st.session_state.live_quote_prices = quote_price_lookup.copy()
+    position_price_overrides = st.session_state.setdefault("position_price_overrides", {})
     contracts_by_commodity = _live_quote_contracts_by_commodity(live_quotes)
 
     with st.container(key="cqg_quotes_box", border=True):
@@ -1100,6 +1146,14 @@ def _render_quotes_box():
                         # engine price exactly as-is rather than writing
                         # back the displayed fallback value every rerun.
                         continue
+                    override = position_price_overrides.get(code)
+                    feed_price = float(quote_price_lookup[code])
+                    if override is not None:
+                        edited_price = float(edited_price)
+                        if edited_price == feed_price and feed_price == override["feed_price"]:
+                            st.session_state.market.futures_prices[code] = override["price"]
+                            continue
+                        del position_price_overrides[code]
                     st.session_state.market.futures_prices[code] = float(edited_price)
 
 
@@ -1211,15 +1265,15 @@ def _render_positions():
         editor_key_rows = tuple(
             (
                 int(row["#"]), int(row["_Leg"]), row["Contract"], row["Type"],
-                row["Strike"], row["Expiry (d)"],
+                row["Strike"], row["Expiry (d)"], row["Underlying Price"],
             )
             for _, row in table.iterrows()
         )
         editor_row_map = tuple(
-            (int(row["#"]), int(row["_Leg"]))
+            (int(row["#"]), int(row["_Leg"]), row["Contract"])
             for _, row in table.iterrows()
         )
-        # Keep the widget mounted across quantity and selection edits.
+        # Reset the editor when its editable live-price input changes.
         editor_key = f"positions_editor_{group_commodity}_{hash(editor_key_rows)}"
         edited_table = st.data_editor(
             styled_editor_table,
@@ -1227,7 +1281,10 @@ def _render_positions():
             width="content",
             height=min(38 * (len(table) + 1), 400),
             row_height=32,
-            disabled=[column for column in editor_table.columns if column not in ("Quantity", "Remove")],
+            disabled=[
+                column for column in editor_table.columns
+                if column not in ("Quantity", "Entry Price", "Underlying Price", "Remove")
+            ],
             column_order=[
                 "Contract", "Type", "Strike", "Quantity", "Entry Price", "TheoV",
                 "Underlying Price", "Structure", "Expiry (d)", "First Notice", "Vol (%)",
@@ -1244,14 +1301,29 @@ def _render_positions():
                     step=1,
                     required=True,
                 ),
+                "Entry Price": st.column_config.NumberColumn(
+                    "Entry Price",
+                    help="Edit the price paid or received for this position.",
+                    format="%.2f",
+                    step=0.25,
+                    required=True,
+                ),
+                "Underlying Price": st.column_config.NumberColumn(
+                    "Underlying Price",
+                    help=(
+                        "Edit the market price used to value positions on this contract. "
+                        "A new live quote may update it again."
+                    ),
+                    format="%.2f",
+                    step=0.25,
+                    required=True,
+                ),
                 "Remove": st.column_config.CheckboxColumn(
                     "Remove",
                     help="Select rows to remove, then use the button below.",
                 ),
                 "Strike": st.column_config.NumberColumn("Strike", format="%.0f"),
-                "Entry Price": st.column_config.NumberColumn("Entry Price", format="%.2f"),
                 "TheoV": st.column_config.NumberColumn("TheoV", format="%.2f"),
-                "Underlying Price": st.column_config.NumberColumn("Underlying Price", format="%.2f"),
                 "Expiry (d)": st.column_config.TextColumn("Expiry (d)"),
                 "Vol (%)": st.column_config.NumberColumn("Vol (%)", format="%.2f"),
                 "First Notice": st.column_config.DateColumn("First Notice", format="YYYY-MM-DD"),

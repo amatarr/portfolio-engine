@@ -58,10 +58,12 @@ The Market panel shows compact quote tables for the available commodities. Portf
 actions (clear, upload, import, and download) are grouped under the collapsed **Manage Portfolio**
 section to keep the Add Leg form and position data visible. The Add Leg form labels the position size
 as **Quantity**; its Underlying field is read-only (always the live price). Current Positions show
-short quantities in red and support direct quantity edits, which are applied from the editor-change
-callback, autosaved, and refresh analysis views. For structures, quantity edits apply to the selected
-leg; removing any selected structure leg removes the full structure. Strike and Expiry (d) display
-with no decimals; Entry Price, TheoV, and
+short quantities in red and support direct edits to Quantity, Entry Price, and Underlying Price.
+Quantity and Entry Price edits are autosaved and refresh analysis views. Underlying Price edits update
+the market price shared by every position on that contract and remain in effect until that contract's
+live quote changes. For structures, quantity and Entry Price edits apply to the selected leg, while
+Underlying Price is shared by contract; removing any selected structure leg removes the full structure.
+Strike and Expiry (d) display with no decimals; Entry Price, TheoV, and
 Underlying Price display with two decimals, while Vol (%) retains its existing precision. The table
 also includes a First Notice column for futures (CBOT: last business day of the month before delivery). Futures show Expiry (d) as days to the CBOT last trading day (the business day before the 15th
 of the contract month). Expired options are left out of the analysis tabs. A Calendar Spread can put its far leg on a later
@@ -73,12 +75,13 @@ It refreshes every 5 seconds with live prices (Underlying Price, TheoV). Option 
 as dates, so Expiry (d) counts down daily; expired options are greyed out until removed. Expiry values
 are rendered as text in the editable table so numeric day counts and the "Expired" label work
 consistently across Pandas versions. Remove selections are retained across table refreshes until
-positions are removed or the portfolio is cleared or replaced. Temporary quantity-edit diagnostics
+positions are removed or the portfolio is cleared or replaced. The positions editor refreshes when
+an underlying price changes so incoming quotes appear correctly. Temporary quantity-edit diagnostics
 write `POSITION_EDITOR_EVENT` and `POSITION_QUANTITY_COMPARE` (editor values versus stored position
 quantity), `POSITION_QUANTITY_UPDATE`, `POSITION_QUANTITY_ASSIGNED`, and `PORTFOLIO_AUTOSAVE_*`
 messages to the app logs; remove this instrumentation after the quantity revert issue is diagnosed.
-The positions editor key stays stable for the same rows, so toggling Remove does not remount the
-editor and discard its in-progress widget state.
+The positions editor key stays stable across quantity and selection edits, but changes when an
+underlying price changes so live quote updates are shown.
 
 Analysis tabs compute only when opened, using the latest prices ("Prices as of" caption). **Greek
 Summary by Tenor** shows negatives in red. The **Price Ladder**, **Vol Ladder** and **Decay Ladder**
