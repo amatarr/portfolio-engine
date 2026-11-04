@@ -58,13 +58,19 @@ The Market panel shows compact quote tables for the available commodities. Portf
 actions (clear, upload, import, and download) are grouped under the collapsed **Manage Portfolio**
 section to keep the Add Leg form and position data visible. The Add Leg form labels the position size
 as **Quantity**; its Underlying field is read-only (always the live price). Current Positions show
-short quantities in red and support direct edits to Quantity, Entry Price, and Underlying Price.
-Quantity and Entry Price edits are autosaved and refresh analysis views. Underlying Price edits update
+short quantities in red and support direct edits to Quantity, Entry Price, Current Vol, and Underlying
+Price. Quantity, Entry Price, and Current Vol edits are autosaved and refresh analysis views. Entry
+Vol is captured when an option is added and remains as a read-only reference; Current Vol is manually
+editable and used to calculate TheoV and Greeks. Existing portfolios without an entry-volatility
+record use their saved volatility as the initial reference. The quote feed supplies futures prices,
+not option volatility, and futures have no option volatility. Underlying Price edits update
 the market price shared by every position on that contract and remain in effect until that contract's
-live quote changes. For structures, quantity and Entry Price edits apply to the selected leg, while
-Underlying Price is shared by contract; removing any selected structure leg removes the full structure.
+live quote changes. For structures, quantity, Entry Price, and Current Vol edits apply to the selected
+leg, while Underlying Price is shared by contract; removing any selected structure leg removes the
+full structure.
 Strike and Expiry (d) display with no decimals; Entry Price, TheoV, and
-Underlying Price display with two decimals, while Vol (%) retains its existing precision. The table
+Underlying Price display with two decimals, while Entry Vol (%) and Current Vol (%) display with two
+decimals. The table
 also includes a First Notice column for futures (CBOT: last business day of the month before delivery). Futures show Expiry (d) as days to the CBOT last trading day (the business day before the 15th
 of the contract month). Expired options are left out of the analysis tabs. A Calendar Spread can put its far leg on a later
 contract of the same commodity (e.g. Dec against Mar), each leg priced off its own underlying,
@@ -80,11 +86,13 @@ an underlying price changes so incoming quotes appear correctly. Temporary quant
 write `POSITION_EDITOR_EVENT` and `POSITION_QUANTITY_COMPARE` (editor values versus stored position
 quantity), `POSITION_QUANTITY_UPDATE`, `POSITION_QUANTITY_ASSIGNED`, and `PORTFOLIO_AUTOSAVE_*`
 messages to the app logs; remove this instrumentation after the quantity revert issue is diagnosed.
-The positions editor key stays stable across quantity and selection edits, but changes when an
-underlying price changes so live quote updates are shown.
+The positions editor key stays stable across quantity and selection edits, but changes when Current
+Vol or an underlying price changes so the updated inputs and live quotes are shown.
 
-Analysis tabs compute only when opened, using the latest prices ("Prices as of" caption). **Greek
-Summary by Tenor** shows negatives in red. The **Price Ladder**, **Vol Ladder** and **Decay Ladder**
+Analysis tabs compute only when opened, using the latest prices ("Prices as of" caption). **Greek Summary by Tenor** shows current Greeks by underlying contract, expandable futures and
+option tenors, and a total row. It uses each option's editable Current Vol and current underlying price.
+The **Price Ladder**,
+**Vol Ladder** and **Decay Ladder**
 each have their own tab, transposed (moves as columns, Greeks as rows with units), with PnL shaded
 green/red by size and negative Greeks in red. Each ladder selector offers a commodity summary as well
 as individual underlying contracts. A commodity summary isolates that commodity's positions and applies

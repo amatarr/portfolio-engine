@@ -415,7 +415,7 @@ def _structure_kind(name):
 
 def _leg_row(
     leg, position_index, structure, contract, stored_price, market,
-    future_vol_pct=None, future_entry_price=None, leg_index=0,
+    future_entry_price=None, leg_index=0,
 ):
     """
     stored_price is whatever meta["settlement_price"] holds -- for a
@@ -439,7 +439,8 @@ def _leg_row(
             "Entry Price": entry_price,
             "Structure": structure, "Type": "Future",
             "Quantity": leg.quantity, "Strike": None, "Expiry (d)": days_left,
-            "First Notice": first_notice_date(contract), "Vol (%)": future_vol_pct,
+            "First Notice": first_notice_date(contract),
+            "Entry Vol (%)": None, "Current Vol (%)": None,
             "Underlying Price": underlying_price, "TheoV": underlying_price,
             "Expired": days_left is not None and days_left < 0,
         }
@@ -468,7 +469,9 @@ def _leg_row(
         "Structure": structure,
         "Type": "Call" if leg.option_type == "call" else "Put",
         "Quantity": leg.quantity, "Strike": leg.strike,
-        "Expiry (d)": days_left, "First Notice": None, "Vol (%)": leg.volatility * 100,
+        "Expiry (d)": days_left, "First Notice": None,
+        "Entry Vol (%)": leg.entry_volatility * 100,
+        "Current Vol (%)": leg.volatility * 100,
         "Underlying Price": underlying_price, "TheoV": mark_to_market,
         "Expired": days_left < 0,
     }
@@ -497,7 +500,6 @@ def _positions_table_for_commodity(portfolio, meta, commodity, market):
         else:
             rows.append(_leg_row(
                 pos, i, "-", contract, stored_price, market,
-                future_vol_pct=meta[i].get("vol_pct"),
                 future_entry_price=future_entry_price,
             ))
 
@@ -714,7 +716,7 @@ def _handle_position_editor_change(editor_key, editor_row_map):
     safe_edits = {
         row_index: {
             field: values[field]
-            for field in ("Quantity", "Entry Price", "Underlying Price", "Remove")
+            for field in ("Quantity", "Entry Price", "Current Vol (%)", "Underlying Price", "Remove")
             if field in values
         }
         for row_index, values in edited_rows.items()
@@ -820,6 +822,30 @@ def _handle_position_editor_change(editor_key, editor_row_map):
                     if not isinstance(position, Structure) and meta.get("settlement_price") != entry_price:
                         meta["settlement_price"] = entry_price
                         changed_positions = True
+
+        if "Current Vol (%)" in values:
+            if not isinstance(leg, AmericanOption):
+                logger.warning(
+                    "POSITION_CURRENT_VOL_IGNORED position_index=%d leg_index=%d value=%r",
+                    position_index,
+                    leg_index,
+                    values["Current Vol (%)"],
+                )
+            else:
+                try:
+                    current_vol = float(values["Current Vol (%)"])
+                except (TypeError, ValueError):
+                    current_vol = None
+                if current_vol is None or not math.isfinite(current_vol) or current_vol <= 0:
+                    logger.warning(
+                        "POSITION_CURRENT_VOL_INVALID position_index=%d leg_index=%d value=%r",
+                        position_index,
+                        leg_index,
+                        values["Current Vol (%)"],
+                    )
+                elif leg.volatility != current_vol / 100:
+                    leg.volatility = current_vol / 100
+                    changed_positions = True
 
         if "Underlying Price" in values:
             try:
@@ -1265,7 +1291,9 @@ def _render_positions():
         editor_key_rows = tuple(
             (
                 int(row["#"]), int(row["_Leg"]), row["Contract"], row["Type"],
-                row["Strike"], row["Expiry (d)"], row["Underlying Price"],
+                row["Strike"], row["Expiry (d)"], row["Entry Vol (%)"],
+                row["Current Vol (%)"],
+                row["Underlying Price"],
             )
             for _, row in table.iterrows()
         )
@@ -1283,12 +1311,14 @@ def _render_positions():
             row_height=32,
             disabled=[
                 column for column in editor_table.columns
-                if column not in ("Quantity", "Entry Price", "Underlying Price", "Remove")
+                if column not in (
+                    "Quantity", "Entry Price", "Current Vol (%)", "Underlying Price", "Remove",
+                )
             ],
             column_order=[
                 "Contract", "Type", "Strike", "Quantity", "Entry Price", "TheoV",
-                "Underlying Price", "Structure", "Expiry (d)", "First Notice", "Vol (%)",
-                "Remove",
+                "Underlying Price", "Structure", "Expiry (d)", "First Notice", "Remove",
+                "Entry Vol (%)", "Current Vol (%)",
             ],
             key=editor_key,
             on_change=_handle_position_editor_change,
@@ -1318,6 +1348,21 @@ def _render_positions():
                     step=0.25,
                     required=True,
                 ),
+                "Current Vol (%)": st.column_config.NumberColumn(
+                    "Current Vol (%)",
+                    help=(
+                        "Current option volatility used to calculate TheoV and Greeks. "
+                        "Futures do not have an option volatility."
+                    ),
+                    format="%.2f",
+                    step=0.01,
+                    min_value=0.01,
+                ),
+                "Entry Vol (%)": st.column_config.NumberColumn(
+                    "Entry Vol (%)",
+                    help="Option volatility when the position was first created; shown for reference.",
+                    format="%.2f",
+                ),
                 "Remove": st.column_config.CheckboxColumn(
                     "Remove",
                     help="Select rows to remove, then use the button below.",
@@ -1325,7 +1370,6 @@ def _render_positions():
                 "Strike": st.column_config.NumberColumn("Strike", format="%.0f"),
                 "TheoV": st.column_config.NumberColumn("TheoV", format="%.2f"),
                 "Expiry (d)": st.column_config.TextColumn("Expiry (d)"),
-                "Vol (%)": st.column_config.NumberColumn("Vol (%)", format="%.2f"),
                 "First Notice": st.column_config.DateColumn("First Notice", format="YYYY-MM-DD"),
             },
         )
@@ -2043,7 +2087,8 @@ with tabs[0]:
             "- **Rho**: \\$K gained/lost per 1% change in interest rates.\n\n"
             "Monetary Greeks are shown in \\$K using the contract multiplier; Delta and Gamma remain "
             "in contracts and contracts per cent, respectively. By Tenor groups futures with their "
-            "underlying contract, followed by that contract's option expiries, on the same \\$K scale.\n\n"
+            "underlying contract, followed by that contract's option expiries, on the same \\$K scale. "
+            "Current Vol in the positions table is the option-vol input used for this risk view.\n\n"
             "The formulas below are the European Black-76 definitions the model is built on. The tool prices "
             "American options with the Barone-Adesi-Whaley approximation and computes every Greek by bumping "
             "the input and repricing, so the numbers approximate these rather than evaluating them directly.",

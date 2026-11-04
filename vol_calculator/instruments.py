@@ -60,6 +60,7 @@ class AmericanOption:
         option_month=None,
         expiry_date=None,
         entry_price=None,
+        entry_volatility=None,
     ):
         self.quantity = quantity
         self.strike = strike
@@ -74,6 +75,8 @@ class AmericanOption:
         # What this leg was actually traded at, when entered per leg (the
         # legs of a structure). Never used for pricing.
         self.entry_price = entry_price
+        # Original volatility retained as a reference when current volatility changes.
+        self.entry_volatility = volatility if entry_volatility is None else entry_volatility
 
     def price(self, market):
 
@@ -98,6 +101,7 @@ class AmericanOption:
             contract=self.contract,
             option_month=self.option_month,
             expiry_date=self.expiry_date,
+            entry_volatility=self.entry_volatility,
         )
 
     def shift_time(self, days):
@@ -109,6 +113,7 @@ class AmericanOption:
             volatility=self.volatility,
             contract=self.contract,
             option_month=self.option_month,
+            entry_volatility=self.entry_volatility,
         )
 
     def __repr__(self):

@@ -14,6 +14,7 @@ _FIELDS = [
     "expiry_days",
     "option_type",
     "volatility",
+    "entry_volatility",
     "contract",
     "option_month",
     "entry_price",
@@ -76,6 +77,7 @@ def _leg_to_row(leg, structure_id, structure_type):
             "expiry_days": "",
             "option_type": "",
             "volatility": "",
+            "entry_volatility": "",
             "contract": leg.contract or "",
             "option_month": "",
             "expiry_date": "",
@@ -91,6 +93,7 @@ def _leg_to_row(leg, structure_id, structure_type):
             "expiry_days": leg.expiry_days,
             "option_type": leg.option_type,
             "volatility": leg.volatility,
+            "entry_volatility": leg.entry_volatility,
             "contract": leg.contract or "",
             "option_month": leg.option_month or "",
             "expiry_date": leg.expiry_date.isoformat() if leg.expiry_date else "",
@@ -162,15 +165,20 @@ def _row_to_leg(row):
         return Future(quantity=float(row["quantity"]), contract=contract)
 
     if row["instrument_type"] == "AmericanOption":
+        volatility = float(row["volatility"])
+        saved_entry_volatility = row.get("entry_volatility", "")
         return AmericanOption(
             quantity=float(row["quantity"]),
             strike=float(row["strike"]),
             expiry_days=int(float(row["expiry_days"])),
             option_type=row["option_type"],
-            volatility=float(row["volatility"]),
+            volatility=volatility,
             contract=contract,
             option_month=row.get("option_month") or None,
             expiry_date=date.fromisoformat(row["expiry_date"]) if row.get("expiry_date") else None,
+            entry_volatility=(
+                float(saved_entry_volatility) if saved_entry_volatility else volatility
+            ),
         )
 
     raise ValueError(f"Unknown instrument_type: {row['instrument_type']}")
