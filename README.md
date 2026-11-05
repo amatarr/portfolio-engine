@@ -58,17 +58,19 @@ The Market panel shows compact quote tables for the available commodities. Portf
 actions (clear, upload, import, and download) are grouped under the collapsed **Manage Portfolio**
 section to keep the Add Leg form and position data visible. The Add Leg form labels the position size
 as **Quantity**; its Underlying field is read-only (always the live price). Current Positions show
-short quantities in red and support direct edits to Quantity, Entry Price, Current Vol, and Underlying
-Price. Quantity, Entry Price, and Current Vol edits are autosaved and refresh analysis views. Entry
-Vol is captured when an option is added and remains as a read-only reference; Current Vol is manually
-editable and used to calculate TheoV and Greeks. Existing portfolios without an entry-volatility
+short quantities in red and support direct edits to Quantity, Entry Price, Reference Price, Current
+Vol, and Underlying Price. Quantity, Entry Price, Reference Price, and Current Vol edits are autosaved
+and refresh analysis views. Reference Price is the underlying price captured when an option is added;
+it remains static unless edited and is blank for futures. Entry Vol is captured when an option is added
+and remains as a read-only reference; Current Vol is manually editable and used to calculate TheoV and
+Greeks. Existing portfolios without an entry-volatility
 record use their saved volatility as the initial reference. The quote feed supplies futures prices,
 not option volatility, and futures have no option volatility. Underlying Price edits update
 the market price shared by every position on that contract and remain in effect until that contract's
 live quote changes. For structures, quantity, Entry Price, and Current Vol edits apply to the selected
 leg, while Underlying Price is shared by contract; removing any selected structure leg removes the
 full structure.
-Strike and Expiry (d) display with no decimals; Entry Price, TheoV, and
+Strike and Expiry (d) display with no decimals; Entry Price, Reference Price, TheoV, and
 Underlying Price display with two decimals, while Entry Vol (%) and Current Vol (%) display with two
 decimals. The table
 also includes a First Notice column for futures (CBOT: last business day of the month before delivery). Futures show Expiry (d) as days to the CBOT last trading day (the business day before the 15th

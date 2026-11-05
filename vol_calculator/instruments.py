@@ -61,6 +61,7 @@ class AmericanOption:
         expiry_date=None,
         entry_price=None,
         entry_volatility=None,
+        reference_price=None,
     ):
         self.quantity = quantity
         self.strike = strike
@@ -77,6 +78,7 @@ class AmericanOption:
         self.entry_price = entry_price
         # Original volatility retained as a reference when current volatility changes.
         self.entry_volatility = volatility if entry_volatility is None else entry_volatility
+        self.reference_price = reference_price
 
     def price(self, market):
 
@@ -102,6 +104,7 @@ class AmericanOption:
             option_month=self.option_month,
             expiry_date=self.expiry_date,
             entry_volatility=self.entry_volatility,
+            reference_price=self.reference_price,
         )
 
     def shift_time(self, days):
@@ -114,6 +117,7 @@ class AmericanOption:
             contract=self.contract,
             option_month=self.option_month,
             entry_volatility=self.entry_volatility,
+            reference_price=self.reference_price,
         )
 
     def __repr__(self):

@@ -18,6 +18,7 @@ _FIELDS = [
     "contract",
     "option_month",
     "entry_price",
+    "reference_price",
     "underlying_price",
     "expiry_date",
 ]
@@ -51,6 +52,7 @@ def portfolio_to_csv(portfolio, path, position_meta=None):
                 row = _leg_to_row(leg, structure_id, pos.name or "")
                 leg_entry_price = getattr(leg, "entry_price", None)
                 row["entry_price"] = leg_entry_price if leg_entry_price is not None else entry_price
+                row["reference_price"] = getattr(leg, "reference_price", None)
                 row["underlying_price"] = underlying_price
                 rows.append(row)
 
@@ -59,6 +61,7 @@ def portfolio_to_csv(portfolio, path, position_meta=None):
         else:
             row = _leg_to_row(pos, "", "")
             row["entry_price"] = entry_price
+            row["reference_price"] = getattr(pos, "reference_price", None)
             row["underlying_price"] = underlying_price
             rows.append(row)
 
@@ -81,6 +84,7 @@ def _leg_to_row(leg, structure_id, structure_type):
             "contract": leg.contract or "",
             "option_month": "",
             "expiry_date": "",
+            "reference_price": "",
         }
 
     if isinstance(leg, AmericanOption):
@@ -97,6 +101,7 @@ def _leg_to_row(leg, structure_id, structure_type):
             "contract": leg.contract or "",
             "option_month": leg.option_month or "",
             "expiry_date": leg.expiry_date.isoformat() if leg.expiry_date else "",
+            "reference_price": leg.reference_price if leg.reference_price is not None else "",
         }
 
     raise TypeError(f"Unsupported leg type for CSV export: {type(leg)}")
@@ -178,6 +183,9 @@ def _row_to_leg(row):
             expiry_date=date.fromisoformat(row["expiry_date"]) if row.get("expiry_date") else None,
             entry_volatility=(
                 float(saved_entry_volatility) if saved_entry_volatility else volatility
+            ),
+            reference_price=(
+                float(row["reference_price"]) if row.get("reference_price") else None
             ),
         )
 

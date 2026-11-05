@@ -441,6 +441,7 @@ def _leg_row(
             "Quantity": leg.quantity, "Strike": None, "Expiry (d)": days_left,
             "First Notice": first_notice_date(contract),
             "Entry Vol (%)": None, "Current Vol (%)": None,
+            "Reference Price": None,
             "Underlying Price": underlying_price, "TheoV": underlying_price,
             "Expired": days_left is not None and days_left < 0,
         }
@@ -472,6 +473,7 @@ def _leg_row(
         "Expiry (d)": days_left, "First Notice": None,
         "Entry Vol (%)": leg.entry_volatility * 100,
         "Current Vol (%)": leg.volatility * 100,
+        "Reference Price": leg.reference_price,
         "Underlying Price": underlying_price, "TheoV": mark_to_market,
         "Expired": days_left < 0,
     }
@@ -716,7 +718,10 @@ def _handle_position_editor_change(editor_key, editor_row_map):
     safe_edits = {
         row_index: {
             field: values[field]
-            for field in ("Quantity", "Entry Price", "Current Vol (%)", "Underlying Price", "Remove")
+            for field in (
+                "Quantity", "Entry Price", "Reference Price", "Current Vol (%)",
+                "Underlying Price", "Remove",
+            )
             if field in values
         }
         for row_index, values in edited_rows.items()
@@ -822,6 +827,40 @@ def _handle_position_editor_change(editor_key, editor_row_map):
                     if not isinstance(position, Structure) and meta.get("settlement_price") != entry_price:
                         meta["settlement_price"] = entry_price
                         changed_positions = True
+
+        if "Reference Price" in values:
+            if not isinstance(leg, AmericanOption):
+                if values["Reference Price"] is not None:
+                    logger.warning(
+                        "POSITION_REFERENCE_PRICE_IGNORED position_index=%d leg_index=%d value=%r",
+                        position_index,
+                        leg_index,
+                        values["Reference Price"],
+                    )
+            else:
+                raw_reference_price = values["Reference Price"]
+                valid_reference_price = True
+                if raw_reference_price in (None, ""):
+                    reference_price = None
+                else:
+                    try:
+                        reference_price = float(raw_reference_price)
+                    except (TypeError, ValueError):
+                        reference_price = None
+                        valid_reference_price = False
+                    if reference_price is not None and not math.isfinite(reference_price):
+                        valid_reference_price = False
+
+                if not valid_reference_price:
+                    logger.warning(
+                        "POSITION_REFERENCE_PRICE_INVALID position_index=%d leg_index=%d value=%r",
+                        position_index,
+                        leg_index,
+                        raw_reference_price,
+                    )
+                elif leg.reference_price != reference_price:
+                    leg.reference_price = reference_price
+                    changed_positions = True
 
         if "Current Vol (%)" in values:
             if not isinstance(leg, AmericanOption):
@@ -1293,6 +1332,7 @@ def _render_positions():
                 int(row["#"]), int(row["_Leg"]), row["Contract"], row["Type"],
                 row["Strike"], row["Expiry (d)"], row["Entry Vol (%)"],
                 row["Current Vol (%)"],
+                row["Reference Price"],
                 row["Underlying Price"],
             )
             for _, row in table.iterrows()
@@ -1312,11 +1352,12 @@ def _render_positions():
             disabled=[
                 column for column in editor_table.columns
                 if column not in (
-                    "Quantity", "Entry Price", "Current Vol (%)", "Underlying Price", "Remove",
+                    "Quantity", "Entry Price", "Reference Price", "Current Vol (%)",
+                    "Underlying Price", "Remove",
                 )
             ],
             column_order=[
-                "Contract", "Type", "Strike", "Quantity", "Entry Price", "TheoV",
+                "Contract", "Type", "Strike", "Quantity", "Entry Price", "Reference Price", "TheoV",
                 "Underlying Price", "Structure", "Expiry (d)", "First Notice", "Remove",
                 "Entry Vol (%)", "Current Vol (%)",
             ],
@@ -1337,6 +1378,15 @@ def _render_positions():
                     format="%.2f",
                     step=0.25,
                     required=True,
+                ),
+                "Reference Price": st.column_config.NumberColumn(
+                    "Reference Price",
+                    help=(
+                        "Underlying price when the option position was entered. "
+                        "This value stays fixed unless you edit it."
+                    ),
+                    format="%.2f",
+                    step=0.25,
                 ),
                 "Underlying Price": st.column_config.NumberColumn(
                     "Underlying Price",
@@ -1741,6 +1791,9 @@ with st.container(border=True):
                         if isinstance(option_leg, AmericanOption):
                             option_leg.option_month = option_month_by_contract_days.get(
                                 (option_leg.contract, option_leg.expiry_days)
+                            )
+                            option_leg.reference_price = st.session_state.market.futures_prices.get(
+                                option_leg.contract
                             )
                     for option_leg, leg_entry in zip(option_legs, leg_entries):
                         option_leg.entry_price = (
