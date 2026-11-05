@@ -1358,8 +1358,8 @@ def _render_positions():
             ],
             column_order=[
                 "Contract", "Type", "Strike", "Quantity", "Entry Price", "Reference Price", "TheoV",
-                "Underlying Price", "Structure", "Expiry (d)", "First Notice", "Remove",
-                "Entry Vol (%)", "Current Vol (%)",
+                "Underlying Price", "Structure", "Expiry (d)", "First Notice",
+                "Entry Vol (%)", "Current Vol (%)", "Remove",
             ],
             key=editor_key,
             on_change=_handle_position_editor_change,

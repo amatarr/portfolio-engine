@@ -83,7 +83,8 @@ It refreshes every 10 seconds with live prices (Underlying Price, TheoV). Option
 as dates, so Expiry (d) counts down daily; expired options are greyed out until removed. Expiry values
 are rendered as text in the editable table so numeric day counts and the "Expired" label work
 consistently across Pandas versions. Remove selections are retained across table refreshes until
-positions are removed or the portfolio is cleared or replaced. The positions editor refreshes when
+positions are removed or the portfolio is cleared or replaced. The Remove column is the rightmost
+column in Current Positions. The positions editor refreshes when
 an underlying price changes so incoming quotes appear correctly. Temporary quantity-edit diagnostics
 write `POSITION_EDITOR_EVENT` and `POSITION_QUANTITY_COMPARE` (editor values versus stored position
 quantity), `POSITION_QUANTITY_UPDATE`, `POSITION_QUANTITY_ASSIGNED`, and `PORTFOLIO_AUTOSAVE_*`
