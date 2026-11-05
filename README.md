@@ -104,6 +104,8 @@ one row per active contract, selectable commodity and measure, and columns match
 scenario controls. A Total row sums the selected measure across underlyings; Futures Price in the
 Price Ladder has no meaningful total. Options expiring during decay are exercised if in the money,
 otherwise they lapse.
+The **Surface** view also offers a commodity summary, showing only that commodity's positions with
+price and volatility moves applied in parallel across its contracts.
 
 ## Project layout
 

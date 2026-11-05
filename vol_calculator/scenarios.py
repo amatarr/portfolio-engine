@@ -407,11 +407,26 @@ def spot_vol_surface(
     spot_step=5,
     vol_low=-10,
     vol_high=10,
-    vol_step=2
+    vol_step=2,
+    commodity=None,
 ):
+    greek_functions = {
+        "Delta": GreekEngine.delta,
+        "Gamma": GreekEngine.gamma,
+        "Vega": GreekEngine.vega,
+        "Volga": GreekEngine.volga,
+        "Vanna-D": GreekEngine.vanna_delta,
+        "Vanna-V": GreekEngine.vanna_vega,
+    }
 
-    current_value = portfolio.value(market)
-    base_price = market.price_for(contract)
+    if commodity is not None:
+        portfolio = _portfolio_for_commodity(portfolio, commodity)
+        contracts = sorted({leg.contract for leg in portfolio.positions})
+        current_value = portfolio.value(market)
+    else:
+        contracts = [contract]
+        current_value = portfolio.value(market)
+        base_price = market.price_for(contract)
 
     spot_moves = list(range(spot_low, spot_high + spot_step, spot_step))
     vol_moves = list(range(vol_low, vol_high + vol_step, vol_step))
@@ -424,25 +439,26 @@ def spot_vol_surface(
 
         for vol_move in vol_moves:
 
-            shocked_market = _bump_contract_price(market, contract, base_price + spot_move)
-            shocked_portfolio = shift_portfolio_vols(portfolio, vol_move / 100, contract)
+            if commodity is not None:
+                shocked_market = copy.deepcopy(market)
+                for selected_contract in contracts:
+                    shocked_market.futures_prices[selected_contract] += spot_move
+                shocked_portfolio = shift_portfolio_vols(portfolio, vol_move / 100)
+            else:
+                shocked_market = _bump_contract_price(market, contract, base_price + spot_move)
+                shocked_portfolio = shift_portfolio_vols(portfolio, vol_move / 100, contract)
 
             if metric == "PnL":
                 value = shocked_portfolio.value(shocked_market) - current_value
-            elif metric == "Delta":
-                value = GreekEngine.delta(shocked_portfolio, shocked_market, contract)
-            elif metric == "Gamma":
-                value = GreekEngine.gamma(shocked_portfolio, shocked_market, contract)
-            elif metric == "Vega":
-                value = GreekEngine.vega(shocked_portfolio, shocked_market, contract)
-            elif metric == "Volga":
-                value = GreekEngine.volga(shocked_portfolio, shocked_market, contract)
-            elif metric == "Vanna-D":
-                value = GreekEngine.vanna_delta(shocked_portfolio, shocked_market, contract)
-            elif metric == "Vanna-V":
-                value = GreekEngine.vanna_vega(shocked_portfolio, shocked_market, contract)
             else:
-                raise ValueError(f"Unknown metric: {metric}")
+                greek = greek_functions.get(metric)
+                if greek is None:
+                    raise ValueError(f"Unknown metric: {metric}")
+                value = (
+                    sum(greek(shocked_portfolio, shocked_market, c) for c in contracts)
+                    if commodity is not None
+                    else greek(shocked_portfolio, shocked_market, contract)
+                )
 
             row.append(value)
 

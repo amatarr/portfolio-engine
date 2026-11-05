@@ -24,14 +24,16 @@ def plot_surface(
     portfolio,
     market,
     contract=None,
-    metric="PnL"
+    metric="PnL",
+    commodity=None,
 ):
 
     surface = spot_vol_surface(
         portfolio,
         market,
         contract=contract,
-        metric=metric
+        metric=metric,
+        commodity=commodity,
     )
     unit = _MONETARY_GREEK_UNITS.get(metric)
     if unit:
@@ -52,7 +54,8 @@ def plot_surface(
 
     plt.title(
         f"{metric}{unit_suffix} Heatmap\n"
-        f"Future Spot Move (¢) vs Vol Shift (pts) -- {contract or 'single contract'}"
+        f"Future Spot Move (¢) vs Vol Shift (pts) -- "
+        f"{f'{commodity} Summary' if commodity else contract or 'single contract'}"
     )
 
     plt.xlabel("Vol Shift (pts)")

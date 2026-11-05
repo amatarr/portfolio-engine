@@ -2018,10 +2018,10 @@ _TAB_INPUT_DEFAULTS = {
 }
 _TAB_SELECTOR_OPTIONS = {
     **{k: set(_contracts_in_portfolio(portfolio)) for k in (
-        "fs_surface", "fs_stress", "fs_payoff", "fs_breakevens",
+        "fs_stress", "fs_payoff", "fs_breakevens",
     )},
     **{k: set(_ladder_selection_options(portfolio)) for k in (
-        "fs_price_ladder", "fs_vol_ladder", "fs_decay_ladder",
+        "fs_price_ladder", "fs_vol_ladder", "fs_decay_ladder", "fs_surface",
     )},
     "tenor_commodity": {
         meta.get("commodity") for meta in st.session_state.position_meta
@@ -2551,19 +2551,28 @@ with tabs[4]:
         _prices_as_of_caption()
         _tab_help(
             "A heatmap of P&L or a chosen Greek across price and vol at the same time, "
-            "so combined moves are visible at a glance."
+            "so combined moves are visible at a glance. A commodity summary shows only that "
+            "commodity's positions, with parallel price and volatility moves across its contracts."
         )
 
         surface_controls, surface_chart = st.columns([1, 4], gap="small")
         with surface_controls:
-            fs_contract = _contract_selector("fs_surface") if has_positions else None
+            surface_selection = _ladder_contract_selector("fs_surface") if has_positions else None
             metric = st.selectbox(
                 "Metric", ["PnL", "Delta", "Gamma", "Vega", "Volga", "Vanna-D", "Vanna-V"], key="surface_metric"
             )
 
-        if fs_contract:
+        if surface_selection:
+            is_commodity_summary = surface_selection.startswith("__commodity_summary__:")
+            surface_commodity = (
+                surface_selection.split(":", 1)[1] if is_commodity_summary else None
+            )
+            surface_contract = None if is_commodity_summary else surface_selection
             with surface_chart:
-                plot_surface(portfolio, market, contract=fs_contract, metric=metric)
+                plot_surface(
+                    portfolio, market, contract=surface_contract,
+                    metric=metric, commodity=surface_commodity,
+                )
                 st.pyplot(plt.gcf(), use_container_width=False)
                 plt.close()
 
