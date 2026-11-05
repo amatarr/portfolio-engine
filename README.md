@@ -77,7 +77,7 @@ contract of the same commodity (e.g. Dec against Mar), each leg priced off its o
 with an optional far strike. In the app, long 1 calendar means buy near, sell far; the Excel workbook's
 Add Leg still sells near and buys far. In Add Leg, structures show one line per leg, each with its own Entry
 Price; left blank, it is filled with that leg's TheoV when the structure is added.
-It refreshes every 5 seconds with live prices (Underlying Price, TheoV). Option expiries are stored
+It refreshes every 10 seconds with live prices (Underlying Price, TheoV). Option expiries are stored
 as dates, so Expiry (d) counts down daily; expired options are greyed out until removed. Expiry values
 are rendered as text in the editable table so numeric day counts and the "Expired" label work
 consistently across Pandas versions. Remove selections are retained across table refreshes until

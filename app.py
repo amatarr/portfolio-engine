@@ -1086,7 +1086,7 @@ def _build_contracts_by_commodity(live_quotes):
     return contracts_by_commodity
 
 
-@st.fragment(run_every="5s")
+@st.fragment(run_every="10s")
 def _render_quotes_box():
     """
     Polls the live quotes source every 10s independently of the rest of
@@ -1244,10 +1244,10 @@ def _render_saved_portfolios():
             st.rerun()
 
 
-@st.fragment(run_every="5s")
+@st.fragment(run_every="10s")
 def _render_positions():
     """
-    Reruns on its own every 5s, like the quotes box, so Underlying Price
+    Reruns on its own every 10s, like the quotes box, so Underlying Price
     and TheoV follow the live prices without a full page rerun.
     """
 
