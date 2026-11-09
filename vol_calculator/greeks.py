@@ -10,6 +10,8 @@ SPOT_BUMP = 0.001
 
 PERCENT = 0.01
 
+RATE_MOVE = 0.001
+
 
 def shift_portfolio_vols(portfolio, dv, contract=None):
     """
@@ -132,7 +134,7 @@ class GreekEngine:
             (portfolio.value(up_market)
             - portfolio.value(down_market))
             / (2 * dr)
-        ) * PERCENT
+        ) * RATE_MOVE
 
     @staticmethod
     def volga(portfolio, market, contract=None):
@@ -218,7 +220,7 @@ class GreekEngine:
 
             "Theta (ΔPnL/day)": GreekEngine.theta(portfolio, market),
 
-            "Rho (ΔPnL/1% rate)": GreekEngine.rho(portfolio, market),
+            "Rho (ΔPnL/0.1% rate)": GreekEngine.rho(portfolio, market),
 
             "Volga (value/vol pt²)": GreekEngine.volga(portfolio, market, contract),
 
@@ -253,7 +255,7 @@ class GreekEngine:
 
             "Theta ($K/1 day decay)": GreekEngine.theta(portfolio, market) * to_k,
 
-            "Rho ($K/1% rate move)": GreekEngine.rho(portfolio, market) * to_k,
+            "Rho ($K/0.1% rate move)": GreekEngine.rho(portfolio, market) * to_k,
 
             "Volga ($K/1 vol pt²)": GreekEngine.volga(portfolio, market, contract) * to_k,
 

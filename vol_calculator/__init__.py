@@ -9,6 +9,7 @@ from vol_calculator.greeks import (
     BASIS_POINT,
     SPOT_BUMP,
     PERCENT,
+    RATE_MOVE,
 )
 from vol_calculator.scenarios import (
     spot_ladder,
@@ -105,6 +106,7 @@ __all__ = [
     "BASIS_POINT",
     "SPOT_BUMP",
     "PERCENT",
+    "RATE_MOVE",
     "spot_ladder",
     "spot_ladder_by_underlying",
     "vol_ladder",

@@ -1052,7 +1052,7 @@ PRICE_LADDER_LABELS = {
     "Delta": "Delta (contracts)",
     "Gamma": "Gamma (ΔDelta/1¢)",
     "Theta": "Theta ($K/1 day)",
-    "Rho": "Rho ($K/1% rate)",
+    "Rho": "Rho ($K/0.1% rate move)",
     "Vega": "Vega ($K/1 vol pt)",
     "Volga": "Volga ($K/1 vol pt²)",
     "Vanna-V": "Vanna-V (change in Vega [$K/vol pt] per 1¢)",
@@ -2306,7 +2306,7 @@ with tabs[0]:
             "- **Vega**: \\$K gained/lost per 1% change in vol.\n"
             "- **Volga**: change in Vega (\\$K per vol point) per vol point.\n"
             "- **Theta**: \\$K lost per day from time passing.\n"
-            "- **Rho**: \\$K gained/lost per 1% change in interest rates.\n\n"
+            "- **Rho**: approximate \\$K gained/lost per 0.1% (10 basis point) increase in interest rates.\n\n"
             "Monetary Greeks are shown in \\$K using the contract multiplier; Delta and Gamma remain "
             "in contracts and contracts per cent, respectively. By Tenor groups futures with their "
             "underlying contract, followed by that contract's option expiries, on the same \\$K scale. "
@@ -2319,7 +2319,7 @@ with tabs[0]:
                 r"C = e^{-rT}\left[F\,N(d_1) - K\,N(d_2)\right]",
                 r"\Delta = e^{-rT} N(d_1), \qquad \Gamma = \frac{e^{-rT} N'(d_1)}{F\sigma\sqrt{T}}",
                 r"\text{Vega} = F e^{-rT} N'(d_1)\sqrt{T}, \qquad \Theta = -\frac{F e^{-rT} N'(d_1)\,\sigma}{2\sqrt{T}} + rC",
-                r"\rho = \frac{\partial C}{\partial r} = -T\,C",
+                r"\text{Rho}_{0.1\%} \approx 0.001 \frac{\partial V}{\partial r} \approx 0.001 \frac{V(r+0.0001)-V(r-0.0001)}{0.0002}",
             ],
         )
 
@@ -2394,11 +2394,11 @@ with tabs[0]:
                             "with market inputs otherwise unchanged."
                         ),
                     ),
-                    "Rho ($K/1% rate move)": st.column_config.Column(
-                        "Rho ($K/1% rate move)",
+                    "Rho ($K/0.1% rate move)": st.column_config.Column(
+                        "Rho ($K/0.1% rate move)",
                         help=(
-                            "Approximate change in portfolio value ($K) for a 1 percentage "
-                            "point increase in the interest rate."
+                            "Approximate change in portfolio value ($K) for a 0.1 percentage "
+                            "point (10 basis point) increase in the interest rate."
                         ),
                     ),
                     "Volga ($K/1 vol pt²)": st.column_config.Column(

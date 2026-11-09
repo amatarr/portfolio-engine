@@ -31,7 +31,8 @@ contract multiplier. The Tenor and ladder headers include each measure's units:
 
 - Delta is expressed as futures-equivalent contracts; Gamma is the change in Delta per 1¢/bu price move.
 - Vega is $K per 1 volatility point (1 percentage point); Volga is $K per volatility point squared.
-- Theta is $K per day; Rho is $K per 1 percentage point rate move.
+- Theta is $K per day; Rho is approximate $K per 0.1 percentage point (10 basis point) rate move.
+- Rho uses a central 1-basis-point rate bump to estimate sensitivity, then scales that result to a 10-basis-point move.
 - Vanna-D is the change in Delta per volatility point; Vanna-V is the change in Vega ($K per
   volatility point) per 1¢/bu price move.
 
