@@ -57,23 +57,31 @@ uses the existing `supabase_url` / `supabase_anon_key` secrets.
 The Market panel shows compact quote tables for the available commodities. Portfolio management
 actions (clear, upload, import, and download) are grouped under the collapsed **Manage Portfolio**
 section to keep the Add Leg form and position data visible. The Add Leg form labels the position size
-as **Quantity**; its Underlying field is read-only (always the live price). Current Positions show
-short quantities in red and support direct edits to Quantity, Entry Price, Reference Price, Current
-Vol, and Underlying Price. Quantity, Entry Price, Reference Price, and Current Vol edits are autosaved
-and refresh analysis views. Reference Price is the underlying price captured when an option is added;
+as **Quantity**; its Underlying field is read-only (always the live price). Current Positions show a
+grouped summary with expandable lot details; short quantities are red in the detail tables. Quantity,
+Entry Price, Reference Price, and Current Vol edits are autosaved and refresh analysis views.
+Reference Price is the underlying price captured when an option is added;
 it remains static unless edited and is blank for futures. Entry Vol is captured when an option is added
 and remains as a read-only reference; Current Vol is manually editable and used to calculate TheoV and
 Greeks. Existing portfolios without an entry-volatility
 record use their saved volatility as the initial reference. The quote feed supplies futures prices,
 not option volatility, and futures have no option volatility. Underlying Price edits update
 the market price shared by every position on that contract and remain in effect until that contract's
-live quote changes. For structures, quantity, Entry Price, and Current Vol edits apply to the selected
-leg, while Underlying Price is shared by contract; removing any selected structure leg removes the
-full structure.
+live quote changes. For structures, quantity and Entry Price edits apply to the selected leg.
+Underlying Price is shared by underlying futures contract; removing any selected structure leg
+removes the full structure.
+Current Positions now starts with a compact summary grouped by risk instrument: futures by contract,
+and options by underlying contract, call/put, strike, and expiry. Summary quantities are net; Entry
+Price, Reference Price, Entry Vol, and TheoV are absolute-quantity-weighted averages for context.
+Summary rows and their expandable detail groups sort by numeric Expiry (d), ascending; expired
+positions appear first and positions without a defined expiry appear last.
+Current Vol edits in the detail table apply to every matching option lot, while Greek calculations
+continue to use the underlying positions. Legacy lots with different Current Vol values are marked
+"Mixed" in the summary until edited to a shared value.
 Strike and Expiry (d) display with no decimals; Entry Price, Reference Price, TheoV, and
 Underlying Price display with two decimals, while Entry Vol (%) and Current Vol (%) display with two
 decimals. The table
-also includes a First Notice column for futures (CBOT: last business day of the month before delivery). Futures show Expiry (d) as days to the CBOT last trading day (the business day before the 15th
+lot detail also includes a First Notice column for futures (CBOT: last business day of the month before delivery). Futures show Expiry (d) as days to the CBOT last trading day (the business day before the 15th
 of the contract month). Expired options are left out of the analysis tabs. A Calendar Spread can put its far leg on a later
 contract of the same commodity (e.g. Dec against Mar), each leg priced off its own underlying,
 with an optional far strike. In the app, long 1 calendar means buy near, sell far; the Excel workbook's
@@ -89,8 +97,8 @@ an underlying price changes so incoming quotes appear correctly. Temporary quant
 write `POSITION_EDITOR_EVENT` and `POSITION_QUANTITY_COMPARE` (editor values versus stored position
 quantity), `POSITION_QUANTITY_UPDATE`, `POSITION_QUANTITY_ASSIGNED`, and `PORTFOLIO_AUTOSAVE_*`
 messages to the app logs; remove this instrumentation after the quantity revert issue is diagnosed.
-The positions editor key stays stable across quantity and selection edits, but changes when Current
-Vol or an underlying price changes so the updated inputs and live quotes are shown.
+Each detail editor stays stable across quantity edits and refreshes when a removal selection, Current
+Vol, or underlying price changes so its shared selection and live quote values stay in sync.
 
 Analysis tabs compute only when opened, using the latest prices ("Prices as of" caption). **Greek Summary by Tenor** shows current Greeks by underlying contract, expandable futures and
 option tenors, and a total row. It uses each option's editable Current Vol and current underlying price.

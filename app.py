@@ -518,6 +518,63 @@ def _position_contract(pos):
     return None
 
 
+def _position_leg(position, leg_index):
+    return position.legs[leg_index] if isinstance(position, Structure) else position
+
+
+def _risk_instrument_key(leg, contract):
+    if isinstance(leg, Future):
+        return (contract, "Future")
+
+    expiry = leg.expiry_date
+    if isinstance(expiry, datetime):
+        expiry = expiry.date()
+    if expiry is None:
+        expiry = ("days", int(leg.expiry_days))
+    return (
+        contract,
+        "Call" if leg.option_type == "call" else "Put",
+        leg.strike,
+        expiry,
+    )
+
+
+def _weighted_average(rows, column):
+    weighted_values = [
+        (float(row[column]), abs(float(row["Quantity"])))
+        for row in rows
+        if pd.notna(row[column]) and pd.notna(row["Quantity"])
+        and float(row["Quantity"]) != 0
+    ]
+    total_weight = sum(weight for _, weight in weighted_values)
+    if not total_weight:
+        return None
+    return sum(value * weight for value, weight in weighted_values) / total_weight
+
+
+def _set_risk_instrument_volatility(portfolio, position_meta, risk_key, volatility):
+    changed = False
+    for position_index, position in enumerate(portfolio.positions):
+        candidate_legs = (
+            enumerate(position.legs)
+            if isinstance(position, Structure)
+            else [(0, position)]
+        )
+        for _, candidate_leg in candidate_legs:
+            contract = (
+                candidate_leg.contract
+                or position_meta[position_index].get("contract")
+            )
+            if (
+                isinstance(candidate_leg, AmericanOption)
+                and _risk_instrument_key(candidate_leg, contract) == risk_key
+                and candidate_leg.volatility != volatility
+            ):
+                candidate_leg.volatility = volatility
+                changed = True
+    return changed
+
+
 def _meta_for_loaded(portfolio, saved_meta):
 
     return [
@@ -758,7 +815,7 @@ def _handle_position_editor_change(editor_key, editor_row_map):
                 selected_positions.discard(position_index)
 
         position = st.session_state.portfolio.positions[position_index]
-        leg = position.legs[leg_index] if isinstance(position, Structure) else position
+        leg = _position_leg(position, leg_index)
         if "Quantity" in values:
             try:
                 quantity = float(values["Quantity"])
@@ -882,9 +939,14 @@ def _handle_position_editor_change(editor_key, editor_row_map):
                         leg_index,
                         values["Current Vol (%)"],
                     )
-                elif leg.volatility != current_vol / 100:
-                    leg.volatility = current_vol / 100
-                    changed_positions = True
+                else:
+                    risk_key = _risk_instrument_key(leg, contract)
+                    changed_positions |= _set_risk_instrument_volatility(
+                        st.session_state.portfolio,
+                        st.session_state.position_meta,
+                        risk_key,
+                        current_vol / 100,
+                    )
 
         if "Underlying Price" in values:
             try:
@@ -1307,128 +1369,235 @@ def _render_positions():
         table = _positions_table_for_commodity(
             st.session_state.portfolio, meta, group_commodity, st.session_state.market,
         )
-        editor_table = table.drop(columns=["#", "_Leg", "Expired"]).copy()
-        position_indices = [int(position_index) for position_index in table["#"]]
-        editor_table["Remove"] = [
-            position_index in selected_position_indices for position_index in position_indices
-        ]
-        editor_table["Expiry (d)"] = [
-            "Expired" if expired else (str(int(days)) if pd.notna(days) else "None")
-            for days, expired in zip(table["Expiry (d)"], table["Expired"])
-        ]
-        styled_editor_table = (
-            editor_table.style
-            .map(_red_if_negative, subset=["Quantity"])
-            .apply(
-                lambda row: (
-                    ["color: #9e9e9e"] * len(row)
-                    if table.loc[row.name, "Expired"] else [""] * len(row)
+        grouped_rows = {}
+        for _, row in table.iterrows():
+            position_index = int(row["#"])
+            leg_index = int(row["_Leg"])
+            position = st.session_state.portfolio.positions[position_index]
+            leg = _position_leg(position, leg_index)
+            key = _risk_instrument_key(leg, row["Contract"])
+            grouped_rows.setdefault(key, []).append(row.to_dict())
+
+        grouped_rows = dict(sorted(
+            grouped_rows.items(),
+            key=lambda item: (
+                float(item[1][0]["Expiry (d)"])
+                if pd.notna(item[1][0]["Expiry (d)"])
+                else math.inf
+            ),
+        ))
+
+        summary_rows = []
+        for key, rows in grouped_rows.items():
+            first = rows[0]
+            quantities = [float(row["Quantity"]) for row in rows if pd.notna(row["Quantity"])]
+            current_vols = [
+                float(row["Current Vol (%)"]) for row in rows
+                if pd.notna(row["Current Vol (%)"])
+            ]
+            vol_is_shared = not current_vols or all(
+                math.isclose(vol, current_vols[0], rel_tol=0, abs_tol=1e-9)
+                for vol in current_vols
+            )
+            days = first["Expiry (d)"]
+            summary_rows.append({
+                "Contract": first["Contract"],
+                "Type": first["Type"],
+                "Strike": first["Strike"],
+                "Quantity (net)": sum(quantities),
+                "Long Qty": sum(quantity for quantity in quantities if quantity > 0),
+                "Short Qty": sum(quantity for quantity in quantities if quantity < 0),
+                "Entry Price (wtd)": _weighted_average(rows, "Entry Price"),
+                "Reference Price (wtd)": _weighted_average(rows, "Reference Price"),
+                "TheoV (wtd)": _weighted_average(rows, "TheoV"),
+                "Underlying Price": first["Underlying Price"],
+                "Expiry (d)": (
+                    "Expired" if first["Expired"]
+                    else (str(int(days)) if pd.notna(days) else "None")
                 ),
-                axis=1,
-            )
+                "Entry Vol (%) (wtd)": _weighted_average(rows, "Entry Vol (%)"),
+                "Current Vol (%)": (
+                    f"{current_vols[0]:.2f}" if vol_is_shared and current_vols
+                    else (None if not current_vols else "Mixed")
+                ),
+                "Lots": len(rows),
+            })
+
+        st.caption(
+            "Summary rows net identical instruments; long and short quantities are shown separately. "
+            "Weighted averages use absolute quantity. Expand a row below to edit its lots; Current Vol "
+            "edits apply to all matching option lots."
         )
-        editor_key_rows = tuple(
-            (
-                int(row["#"]), int(row["_Leg"]), row["Contract"], row["Type"],
-                row["Strike"], row["Expiry (d)"], row["Entry Vol (%)"],
-                row["Current Vol (%)"],
-                row["Reference Price"],
-                row["Underlying Price"],
-            )
-            for _, row in table.iterrows()
+        summary_table = pd.DataFrame(summary_rows).style.map(
+            _red_if_negative, subset=["Quantity (net)", "Short Qty"]
         )
-        editor_row_map = tuple(
-            (int(row["#"]), int(row["_Leg"]), row["Contract"])
-            for _, row in table.iterrows()
-        )
-        # Reset the editor when its editable live-price input changes.
-        editor_key = f"positions_editor_{group_commodity}_{hash(editor_key_rows)}"
-        edited_table = st.data_editor(
-            styled_editor_table,
+        st.dataframe(
+            summary_table,
             hide_index=True,
             width="content",
-            height=min(38 * (len(table) + 1), 400),
-            row_height=32,
-            disabled=[
-                column for column in editor_table.columns
-                if column not in (
-                    "Quantity", "Entry Price", "Reference Price", "Current Vol (%)",
-                    "Underlying Price", "Remove",
-                )
-            ],
-            column_order=[
-                "Contract", "Type", "Strike", "Quantity", "Entry Price", "Reference Price", "TheoV",
-                "Underlying Price", "Structure", "Expiry (d)", "First Notice",
-                "Entry Vol (%)", "Current Vol (%)", "Remove",
-            ],
-            key=editor_key,
-            on_change=_handle_position_editor_change,
-            args=(editor_key, editor_row_map),
             column_config={
-                "Quantity": st.column_config.NumberColumn(
-                    "Quantity",
-                    help="Edit the signed position quantity. Negative values represent short positions.",
-                    format="%g",
-                    step=1,
-                    required=True,
-                ),
-                "Entry Price": st.column_config.NumberColumn(
-                    "Entry Price",
-                    help="Edit the price paid or received for this position.",
-                    format="%.2f",
-                    step=0.25,
-                    required=True,
-                ),
-                "Reference Price": st.column_config.NumberColumn(
-                    "Reference Price",
-                    help=(
-                        "Underlying price when the option position was entered. "
-                        "This value stays fixed unless you edit it."
-                    ),
-                    format="%.2f",
-                    step=0.25,
-                ),
-                "Underlying Price": st.column_config.NumberColumn(
-                    "Underlying Price",
-                    help=(
-                        "Edit the market price used to value positions on this contract. "
-                        "A new live quote may update it again."
-                    ),
-                    format="%.2f",
-                    step=0.25,
-                    required=True,
-                ),
-                "Current Vol (%)": st.column_config.NumberColumn(
-                    "Current Vol (%)",
-                    help=(
-                        "Current option volatility used to calculate TheoV and Greeks. "
-                        "Futures do not have an option volatility."
-                    ),
-                    format="%.2f",
-                    step=0.01,
-                    min_value=0.01,
-                ),
-                "Entry Vol (%)": st.column_config.NumberColumn(
-                    "Entry Vol (%)",
-                    help="Option volatility when the position was first created; shown for reference.",
-                    format="%.2f",
-                ),
-                "Remove": st.column_config.CheckboxColumn(
-                    "Remove",
-                    help="Select rows to remove, then use the button below.",
-                ),
                 "Strike": st.column_config.NumberColumn("Strike", format="%.0f"),
-                "TheoV": st.column_config.NumberColumn("TheoV", format="%.2f"),
+                "Quantity (net)": st.column_config.NumberColumn(
+                    "Quantity (net)", format="%g"
+                ),
+                "Long Qty": st.column_config.NumberColumn("Long Qty", format="%g"),
+                "Short Qty": st.column_config.NumberColumn("Short Qty", format="%g"),
+                "Entry Price (wtd)": st.column_config.NumberColumn(
+                    "Entry Price (wtd)", format="%.2f"
+                ),
+                "Reference Price (wtd)": st.column_config.NumberColumn(
+                    "Reference Price (wtd)", format="%.2f"
+                ),
+                "TheoV (wtd)": st.column_config.NumberColumn("TheoV (wtd)", format="%.2f"),
+                "Underlying Price": st.column_config.NumberColumn(
+                    "Underlying Price", format="%.2f"
+                ),
                 "Expiry (d)": st.column_config.TextColumn("Expiry (d)"),
-                "First Notice": st.column_config.DateColumn("First Notice", format="YYYY-MM-DD"),
+                "Entry Vol (%) (wtd)": st.column_config.NumberColumn(
+                    "Entry Vol (%) (wtd)", format="%.2f"
+                ),
+                "Current Vol (%)": st.column_config.TextColumn("Current Vol (%)"),
             },
         )
 
-        for position_index, should_remove in zip(position_indices, edited_table["Remove"]):
-            if should_remove:
-                selected_position_indices.add(position_index)
-            else:
-                selected_position_indices.discard(position_index)
+        for group_number, (risk_key, rows) in enumerate(grouped_rows.items()):
+            first = rows[0]
+            net_quantity = sum(
+                float(row["Quantity"]) for row in rows if pd.notna(row["Quantity"])
+            )
+            days = first["Expiry (d)"]
+            expiry_label = "Expired" if first["Expired"] else (
+                f"{int(days)}d" if pd.notna(days) else "N/A"
+            )
+            label = (
+                f"{first['Contract']} {first['Type']}"
+                + (f" {first['Strike']:g}" if pd.notna(first["Strike"]) else "")
+                + f" | {expiry_label} | net {net_quantity:g} | {len(rows)} lot(s)"
+            )
+            with st.expander(label, expanded=False):
+                group_table = pd.DataFrame(rows)
+                editor_table = group_table.drop(columns=["#", "_Leg", "Expired"]).copy()
+                position_indices = [int(row["#"]) for row in rows]
+                editor_table["Remove"] = [
+                    position_index in selected_position_indices
+                    for position_index in position_indices
+                ]
+                editor_table["Expiry (d)"] = [
+                    "Expired" if row["Expired"] else (
+                        str(int(row["Expiry (d)"])) if pd.notna(row["Expiry (d)"]) else "None"
+                    )
+                    for row in rows
+                ]
+                styled_editor_table = (
+                    editor_table.style
+                    .map(_red_if_negative, subset=["Quantity"])
+                    .apply(
+                        lambda row: (
+                            ["color: #9e9e9e"] * len(row)
+                            if group_table.loc[row.name, "Expired"] else [""] * len(row)
+                        ),
+                        axis=1,
+                    )
+                )
+                editor_key_rows = tuple(
+                    (
+                        int(row["#"]), int(row["_Leg"]), row["Contract"], row["Type"],
+                        row["Strike"], row["Expiry (d)"], row["Entry Vol (%)"],
+                        row["Current Vol (%)"], row["Reference Price"],
+                        row["Underlying Price"],
+                    )
+                    for row in rows
+                )
+                editor_row_map = tuple(
+                    (int(row["#"]), int(row["_Leg"]), row["Contract"])
+                    for row in rows
+                )
+                selected_in_editor = tuple(
+                    sorted(set(position_indices).intersection(selected_position_indices))
+                )
+                editor_key = (
+                    f"positions_editor_{group_commodity}_{group_number}_"
+                    f"{hash((risk_key, editor_key_rows, selected_in_editor))}"
+                )
+                st.data_editor(
+                    styled_editor_table,
+                    hide_index=True,
+                    width="content",
+                    height=min(38 * (len(rows) + 1), 400),
+                    row_height=32,
+                    disabled=[
+                        column for column in editor_table.columns
+                        if column not in (
+                            "Quantity", "Entry Price", "Reference Price", "Current Vol (%)",
+                            "Underlying Price", "Remove",
+                        )
+                    ],
+                    column_order=[
+                        "Contract", "Type", "Strike", "Quantity", "Entry Price",
+                        "Reference Price", "TheoV", "Underlying Price", "Structure",
+                        "Expiry (d)", "First Notice", "Entry Vol (%)", "Current Vol (%)",
+                        "Remove",
+                    ],
+                    key=editor_key,
+                    on_change=_handle_position_editor_change,
+                    args=(editor_key, editor_row_map),
+                    column_config={
+                        "Quantity": st.column_config.NumberColumn(
+                            "Quantity",
+                            help="Edit this lot's signed open quantity.",
+                            format="%g",
+                            step=1,
+                            required=True,
+                        ),
+                        "Entry Price": st.column_config.NumberColumn(
+                            "Entry Price",
+                            help="Edit the price paid or received for this position.",
+                            format="%.2f",
+                            step=0.25,
+                            required=True,
+                        ),
+                        "Reference Price": st.column_config.NumberColumn(
+                            "Reference Price",
+                            help="Underlying price when the option position was entered.",
+                            format="%.2f",
+                            step=0.25,
+                        ),
+                        "Underlying Price": st.column_config.NumberColumn(
+                            "Underlying Price",
+                            help=(
+                                "Edit the market price used to value positions on this contract. "
+                                "A new live quote may update it again."
+                            ),
+                            format="%.2f",
+                            step=0.25,
+                            required=True,
+                        ),
+                        "Current Vol (%)": st.column_config.NumberColumn(
+                            "Current Vol (%)",
+                            help="Used for pricing and Greeks; edits update all matching option lots.",
+                            format="%.2f",
+                            step=0.01,
+                            min_value=0.01,
+                        ),
+                        "Entry Vol (%)": st.column_config.NumberColumn(
+                            "Entry Vol (%)",
+                            help="Volatility when this lot was entered; shown for reference.",
+                            format="%.2f",
+                        ),
+                        "Remove": st.column_config.CheckboxColumn(
+                            "Remove",
+                            help="Select rows to remove, then use the button below.",
+                        ),
+                        "Strike": st.column_config.NumberColumn("Strike", format="%.0f"),
+                        "TheoV": st.column_config.NumberColumn("TheoV", format="%.2f"),
+                        "Expiry (d)": st.column_config.TextColumn("Expiry (d)"),
+                        "First Notice": st.column_config.DateColumn(
+                            "First Notice", format="YYYY-MM-DD"
+                        ),
+                    },
+                )
+
+        position_indices = [int(position_index) for position_index in table["#"]]
 
         selected_positions = sorted(
             selected_position_indices.intersection(position_indices), reverse=True
