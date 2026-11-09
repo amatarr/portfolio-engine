@@ -162,8 +162,8 @@ def plot_payoff(
     market,
     time_steps,
     contract=None,
-    low=-20,
-    high=20,
+    low=-10,
+    high=10,
     step=2,
     include_expiry=True
 ):

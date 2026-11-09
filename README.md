@@ -103,6 +103,7 @@ Vol, or underlying price changes so its shared selection and live quote values s
 
 Analysis tabs compute only when opened, using the latest prices ("Prices as of" caption). **Greek Summary by Tenor** shows current Greeks by underlying contract, expandable futures and
 option tenors, and a total row. It uses each option's editable Current Vol and current underlying price.
+The Payoff Diagram defaults to a -10% to +10% futures-price range in 2-percentage-point increments.
 The **Price Ladder**,
 **Vol Ladder** and **Decay Ladder**
 each have their own tab, transposed (moves as columns, Greeks as rows with units), with PnL shaded
