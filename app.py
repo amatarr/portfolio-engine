@@ -6,6 +6,7 @@ import tempfile
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import altair as alt
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -39,6 +40,8 @@ from vol_calculator import (
     report_by_tenor_groups,
     breakevens_quadratic,
     breakevens_numerical,
+    breakeven_curve,
+    breakeven_roots,
     plot_surface,
     plot_strike_map,
     strike_map,
@@ -2178,6 +2181,143 @@ def _tab_help(text, formulas=None):
                 st.latex(f)
 
 
+def _breakeven_label(base_price, move):
+    if move is None:
+        return "None in range"
+    move = round(move, 2) + 0.0  # no "-0.00"
+    return f"{base_price + move:,.2f} ({move:+.2f}¢)"
+
+
+def _render_breakevens(portfolio, market, contract, days, range_cents):
+    """
+    Breakeven chart and table for one contract: exact and quadratic
+    `days`-forward P&L against that contract's price, with every exact
+    crossing marked and the nearest one on each side summarised.
+    """
+
+    base_price = market.price_for(contract)
+    search_pct = 0.5
+    roots = breakeven_roots(portfolio, market, contract, search_pct=search_pct, days=days)
+    numeric = breakevens_numerical(portfolio, market, contract, search_pct=search_pct, days=days)
+    quad = breakevens_quadratic(portfolio, market, contract, days=days)
+
+    # Widen the chart to show the nearest breakeven on each side, within the search range.
+    low, high = -range_cents, range_cents
+    if numeric["downside"] is not None:
+        low = min(low, numeric["downside"] * 1.15)
+    if numeric["upside"] is not None:
+        high = max(high, numeric["upside"] * 1.15)
+    low = max(low, -base_price * search_pct)
+    high = min(high, base_price * search_pct)
+
+    curve = breakeven_curve(portfolio, market, contract, days=days, low=low, high=high, extra_moves=roots)
+    factor = market.contract_multiplier / 1000
+    curve["Exact $K"] = curve["Exact PnL"] * factor
+    curve["Quadratic $K"] = curve["Quadratic PnL"].astype(float) * factor
+    curve["Profit"] = curve["Exact $K"].clip(lower=0)
+    curve["Loss"] = curve["Exact $K"].clip(upper=0)
+
+    x = alt.X("Futures Price:Q", title=f"{contract} futures price (¢/bu)", scale=alt.Scale(zero=False, nice=False))
+    y_title = f"P&L in {days} day{'s' if days != 1 else ''} ($K)"
+    base = alt.Chart(curve).encode(x=x)
+
+    shading = [
+        base.mark_area(color=color, opacity=0.18).encode(y=alt.Y(f"{column}:Q", title=y_title), y2=alt.datum(0))
+        for column, color in (("Profit", "#2e7d32"), ("Loss", "#c62828"))
+    ]
+
+    lines = (
+        alt.Chart(curve)
+        .transform_fold(["Exact $K", "Quadratic $K"], as_=["Curve", "PnL"])
+        .transform_filter("isValid(datum.PnL)")
+        .transform_calculate(Curve="datum.Curve == 'Exact $K' ? 'Exact' : 'Quadratic (estimate)'")
+        .mark_line(strokeWidth=2.5)
+        .encode(
+            x=x,
+            y=alt.Y("PnL:Q", title=y_title),
+            color=alt.Color(
+                "Curve:N",
+                scale=alt.Scale(domain=["Exact", "Quadratic (estimate)"], range=["#1f6fd1", "#ef8a17"]),
+                legend=alt.Legend(title=None, orient="top"),
+            ),
+            strokeDash=alt.StrokeDash(
+                "Curve:N",
+                scale=alt.Scale(domain=["Exact", "Quadratic (estimate)"], range=[[1, 0], [6, 4]]),
+                legend=None,
+            ),
+        )
+    )
+
+    zero = alt.Chart().mark_rule(color="gray", strokeWidth=1).encode(y=alt.datum(0))
+    current = pd.DataFrame({"Futures Price": [base_price], "Label": [f"Current {base_price:,.2f}"]})
+    current_rule = alt.Chart(current).mark_rule(color="gray", strokeDash=[3, 3]).encode(x=x)
+    current_text = (
+        alt.Chart(current)
+        .mark_text(align="left", dx=4, dy=-6, color="gray", baseline="bottom")
+        .encode(x=x, y=alt.value(12), text="Label:N")
+    )
+
+    layers = [*shading, zero, current_rule, current_text, lines]
+
+    visible = [r for r in roots if low <= r <= high]
+    if visible:
+        # Put each label on the side the curve isn't: up-left where P&L rises
+        # through zero, up-right where it falls.
+        rising = []
+        for r in visible:
+            after = curve.loc[curve["Move"] > r, "Exact PnL"]
+            rising.append(bool(len(after)) and after.iloc[0] > 0)
+        points = pd.DataFrame({
+            "Futures Price": [base_price + r for r in visible],
+            "Zero": [0.0] * len(visible),
+            "Label": [_breakeven_label(base_price, r) for r in visible],
+            "Rising": rising,
+        })
+        point_base = alt.Chart(points).encode(x=x, y=alt.Y("Zero:Q", title=y_title))
+        layers += [
+            point_base.mark_point(filled=True, size=90, color="black", stroke="white", strokeWidth=1.5),
+            point_base.transform_filter("datum.Rising")
+            .mark_text(align="right", dx=-8, dy=-10, fontWeight="bold").encode(text="Label:N"),
+            point_base.transform_filter("!datum.Rising")
+            .mark_text(align="left", dx=8, dy=-10, fontWeight="bold").encode(text="Label:N"),
+        ]
+
+    hover = alt.selection_point(fields=["Futures Price"], nearest=True, on="pointerover", empty=False)
+    layers += [
+        base.mark_rule(color="gray", opacity=0.6).encode(
+            opacity=alt.condition(hover, alt.value(0.6), alt.value(0)),
+            tooltip=[
+                alt.Tooltip("Futures Price:Q", title="Price (¢/bu)", format=",.2f"),
+                alt.Tooltip("Move:Q", title="Move (¢)", format="+.2f"),
+                alt.Tooltip("Exact $K:Q", title="Exact ($K)", format=",.2f"),
+                alt.Tooltip("Quadratic $K:Q", title="Quadratic ($K)", format=",.2f"),
+            ],
+        ).add_params(hover),
+    ]
+
+    st.altair_chart(alt.layer(*layers).properties(height=420), width="stretch")
+
+    if not any(True for _ in _option_legs(portfolio)):
+        st.info("Futures only: P&L is a straight line with no time decay, so the breakeven is the current price.")
+
+    st.dataframe(
+        pd.DataFrame(
+            {
+                "Downside": [_breakeven_label(base_price, numeric["downside"]),
+                             _breakeven_label(base_price, quad["downside"])],
+                "Upside": [_breakeven_label(base_price, numeric["upside"]),
+                           _breakeven_label(base_price, quad["upside"])],
+            },
+            index=["Exact", "Quadratic (estimate)"],
+        ),
+        width="content",
+    )
+
+    others = [r for r in roots if r not in (numeric["downside"], numeric["upside"])]
+    if others:
+        st.caption("Other crossings: " + ", ".join(_breakeven_label(base_price, r) for r in others))
+
+
 # --- main area ---
 portfolio = st.session_state.portfolio
 market = st.session_state.market
@@ -2237,6 +2377,7 @@ _TAB_INPUT_DEFAULTS = {
     "vol_low": -5, "vol_high": 5, "vol_step": 1,
     "decay_horizon": 30, "decay_step": 2,
     "payoff_steps": "0,30,60",
+    "be_days": 1, "be_range": 30,
 }
 _TAB_SELECTOR_OPTIONS = {
     **{k: set(_contracts_in_portfolio(portfolio)) for k in (
@@ -2867,29 +3008,32 @@ with tabs[8]:
         st.subheader("Breakevens")
         _prices_as_of_caption()
         _tab_help(
-            "The futures moves, in cents from the current price (negative = down, positive = up), at which "
-            "one-day P&L crosses zero. Add them to the futures price for the absolute level. Two estimates are "
-            "shown: a fast quadratic approximation and an exact one that fully reprices the portfolio. "
-            "They should be close; if they diverge, trust the numerical one, especially for butterflies "
-            "and collars. `null` means no breakeven exists in the search range.",
+            "The futures prices at which the book's P&L, a chosen number of calendar days forward, crosses "
+            "zero. The chart shows that P&L against the selected contract's price: green where the book makes "
+            "money, red where it loses. Only the selected contract moves; every other contract stays at its "
+            "current price.\n\n"
+            "- **Exact** (solid) fully reprices the book that many days forward. Options that expire within "
+            "the horizon are exercised if in the money, otherwise they lapse.\n"
+            "- **Quadratic** (dashed) is the fast estimate from today's Delta, Gamma and Theta. It is drawn "
+            "only within 10% of the price, where it is reliable. If the two differ, trust Exact, especially "
+            "for butterflies and collars.\n\n"
+            "The table gives the nearest breakeven on each side as a futures price, with the move from the "
+            "current price in cents. Hover over the chart to read the P&L at any price. P&L is in \\$K "
+            "using the contract multiplier.",
             formulas=[
-                r"\Delta\,\Delta F + \tfrac{1}{2}\Gamma\,\Delta F^2 + \Theta = 0",
-                r"\Delta F = \frac{-\Delta \pm \sqrt{\Delta^2 - 2\Gamma\Theta}}{\Gamma}",
+                r"\Delta\,\Delta F + \tfrac{1}{2}\Gamma\,\Delta F^2 + \Theta \cdot \text{days} = 0",
+                r"\Delta F = \frac{-\Delta \pm \sqrt{\Delta^2 - 2\Gamma\Theta \cdot \text{days}}}{\Gamma}",
             ],
         )
 
         if has_positions:
 
-            fs_contract = _contract_selector("fs_breakevens")
+            be_controls, be_chart = st.columns([1, 4], gap="small")
+            with be_controls:
+                fs_contract = _contract_selector("fs_breakevens")
+                be_days = int(st.number_input("Days forward", min_value=1, max_value=365, step=1, key="be_days"))
+                be_range = float(st.number_input("Range (± ¢)", min_value=5, max_value=300, step=5, key="be_range"))
 
             if fs_contract:
-                quad = breakevens_quadratic(portfolio, market, fs_contract)
-                numeric = breakevens_numerical(portfolio, market, fs_contract)
-
-                col1, col2 = st.columns(2)
-
-                col1.write("Quadratic (fast, Taylor approx)")
-                col1.json(quad)
-
-                col2.write("Numerical (exact, 1-day)")
-                col2.json(numeric)
+                with be_chart, st.spinner("Pricing breakevens..."):
+                    _render_breakevens(portfolio, market, fs_contract, be_days, be_range)

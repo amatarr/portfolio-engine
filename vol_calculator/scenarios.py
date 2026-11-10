@@ -467,12 +467,13 @@ def spot_vol_surface(
     return pd.DataFrame(data, index=spot_moves, columns=vol_moves)
 
 
-def breakevens_quadratic(portfolio, market, contract=None, max_move_pct=0.10):
+def breakevens_quadratic(portfolio, market, contract=None, max_move_pct=0.10, days=1):
     """
     Fast, closed-form breakeven estimate from a 2nd-order Taylor expansion:
-    Delta*dF + 1/2*Gamma*dF^2 + Theta = 0. Accurate for small moves and
-    smooth (non-kinked) books; degrades for large moves or structures with
-    kinks (butterflies, 3-ways) -- use breakevens_numerical for those.
+    Delta*dF + 1/2*Gamma*dF^2 + Theta*days = 0, using today's Greeks.
+    Accurate for small moves and smooth (non-kinked) books; degrades for
+    large moves, long horizons or structures with kinks (butterflies,
+    3-ways) -- use breakevens_numerical for those.
 
     Delta/Gamma are with respect to the given contract (the "Future Spot"
     being analyzed) -- other contracts' legs still contribute to Theta/Value
@@ -487,7 +488,7 @@ def breakevens_quadratic(portfolio, market, contract=None, max_move_pct=0.10):
 
     delta = GreekEngine.delta(portfolio, market, contract)
     gamma = GreekEngine.gamma(portfolio, market, contract)
-    theta = GreekEngine.theta(portfolio, market)
+    theta = GreekEngine.theta(portfolio, market) * days
 
     if gamma == 0:
         return {"downside": None, "upside": None}
@@ -512,20 +513,10 @@ def breakevens_quadratic(portfolio, market, contract=None, max_move_pct=0.10):
     }
 
 
-def breakevens_numerical(portfolio, market, contract=None, search_pct=0.5, steps=200):
-    """
-    Exact 1-day breakeven: finds the move dF in the given contract's price
-    where next-day P&L (whole portfolio, repriced one day closer to expiry)
-    crosses zero, via a bracket scan + brentq root-find on the real pricer.
-    No Taylor error, so this is the more trustworthy number once a book has
-    kinked payoffs (butterflies, 3-ways) where breakevens_quadratic can
-    mislead.
+def _forward_pnl(portfolio, market, contract, days):
+    """P&L(dF): the whole book `days` forward, with only `contract` moved by dF cents."""
 
-    Returns the futures MOVE dF in cents from the current price (downside
-    negative, upside positive), not the absolute futures level.
-    """
-
-    shifted = shift_time(portfolio, 1)
+    shifted = shift_time(portfolio, days)
     current_value = portfolio.value(market)
     base_price = market.price_for(contract)
 
@@ -533,12 +524,26 @@ def breakevens_numerical(portfolio, market, contract=None, search_pct=0.5, steps
         shocked_market = _bump_contract_price(market, contract, base_price + spot_move)
         return shifted.value(shocked_market) - current_value
 
-    span = base_price * search_pct
+    return pnl
+
+
+def breakeven_roots(portfolio, market, contract=None, search_pct=0.5, steps=200, days=1):
+    """
+    Every move dF (cents, within +/- search_pct of the price) where the
+    exact `days`-forward P&L crosses zero, sorted low to high. A bracket
+    scan + brentq on the real pricer, so kinked books (butterflies, ratio
+    spreads) can have several crossings on one side.
+    """
+
+    pnl = _forward_pnl(portfolio, market, contract, days)
+    span = market.price_for(contract) * search_pct
     xs = [-span + i * (2 * span) / steps for i in range(steps + 1)]
     ys = [pnl(x) for x in xs]
 
-    downside = None
-    upside = None
+    if all(y == 0 for y in ys):
+        return []
+
+    roots = []
 
     for i in range(len(xs) - 1):
 
@@ -549,12 +554,70 @@ def breakevens_numerical(portfolio, market, contract=None, search_pct=0.5, steps
         else:
             continue
 
-        if root <= 0 and downside is None:
-            downside = root
-        elif root > 0 and upside is None:
-            upside = root
+        if not roots or abs(root - roots[-1]) > 1e-9:
+            roots.append(root)
 
-    return {"downside": downside, "upside": upside}
+    if ys[-1] == 0 and (not roots or abs(xs[-1] - roots[-1]) > 1e-9):
+        roots.append(xs[-1])
+
+    return roots
+
+
+def breakevens_numerical(portfolio, market, contract=None, search_pct=0.5, steps=200, days=1):
+    """
+    Exact breakeven: the move dF in the given contract's price where the
+    `days`-forward P&L (whole portfolio, repriced that many days closer to
+    expiry) crosses zero, nearest to the current price on each side. No
+    Taylor error, so this is the more trustworthy number once a book has
+    kinked payoffs (butterflies, 3-ways) where breakevens_quadratic can
+    mislead.
+
+    Returns the futures MOVE dF in cents from the current price (downside
+    negative, upside positive), not the absolute futures level.
+    """
+
+    roots = breakeven_roots(portfolio, market, contract, search_pct, steps, days)
+    downside = [r for r in roots if r <= 0]
+    upside = [r for r in roots if r > 0]
+
+    return {
+        "downside": max(downside) if downside else None,
+        "upside": min(upside) if upside else None,
+    }
+
+
+def breakeven_curve(portfolio, market, contract=None, days=1, low=-30, high=30, points=121,
+                    quad_limit_pct=0.10, extra_moves=()):
+    """
+    The curves behind the breakevens, for charting: exact `days`-forward
+    P&L and the quadratic estimate (Delta*dF + 1/2*Gamma*dF^2 + Theta*days)
+    at each move dF from low to high cents. The quadratic is left blank
+    beyond quad_limit_pct of the price, where constant Gamma stops holding.
+    extra_moves (e.g. the breakevens) are added as exact points so the
+    curve passes through zero there.
+    """
+
+    pnl = _forward_pnl(portfolio, market, contract, days)
+    base_price = market.price_for(contract)
+    delta = GreekEngine.delta(portfolio, market, contract)
+    gamma = GreekEngine.gamma(portfolio, market, contract)
+    theta = GreekEngine.theta(portfolio, market) * days
+    limit = base_price * quad_limit_pct
+
+    moves = [low + i * (high - low) / (points - 1) for i in range(points)]
+    moves = sorted(set(moves) | {m for m in extra_moves if low <= m <= high})
+
+    rows = []
+    for move in moves:
+        quad = delta * move + 0.5 * gamma * move ** 2 + theta if abs(move) <= limit else None
+        rows.append({
+            "Move": move,
+            "Futures Price": base_price + move,
+            "Exact PnL": pnl(move),
+            "Quadratic PnL": quad,
+        })
+
+    return pd.DataFrame(rows)
 
 
 def _flatten_positions(positions):

@@ -117,6 +117,12 @@ one row per active contract, selectable commodity and measure, and columns match
 scenario controls. A Total row sums the selected measure across underlyings; Futures Price in the
 Price Ladder has no meaningful total. Options expiring during decay are exercised if in the money,
 otherwise they lapse.
+
+The **Breakevens** tab charts the book's P&L a chosen number of days forward (default 1) against the
+selected contract's price, with the exact repriced curve, the quadratic Delta/Gamma/Theta estimate
+(drawn within 10% of the price), green/red profit and loss shading, and every zero crossing marked.
+Hover to read the P&L at any price. The table gives the nearest breakeven on each side as a price and
+a move in cents; the chart range (default ±30¢) widens to include them.
 The **Surface** view also offers a commodity summary, showing only that commodity's positions with
 price and volatility moves applied in parallel across its contracts.
 
