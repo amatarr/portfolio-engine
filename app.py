@@ -6,10 +6,6 @@ import tempfile
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-import altair as alt
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
@@ -42,11 +38,10 @@ from vol_calculator import (
     breakevens_numerical,
     breakeven_curve,
     breakeven_roots,
-    plot_surface,
-    plot_strike_map,
     strike_map,
-    plot_stress_report,
-    plot_payoff,
+    spot_vol_surface,
+    stress_report,
+    payoff_curves,
     portfolio_to_csv,
     portfolio_from_csv,
     fetch_latest_sofr,
@@ -60,6 +55,7 @@ from vol_calculator import (
     first_notice_date,
     last_trading_date,
 )
+from vol_calculator import charts
 
 logger = logging.getLogger(__name__)
 
@@ -2181,13 +2177,6 @@ def _tab_help(text, formulas=None):
                 st.latex(f)
 
 
-def _breakeven_label(base_price, move):
-    if move is None:
-        return "None in range"
-    move = round(move, 2) + 0.0  # no "-0.00"
-    return f"{base_price + move:,.2f} ({move:+.2f}¢)"
-
-
 def _render_breakevens(portfolio, market, contract, days, range_cents):
     """
     Breakeven chart and table for one contract: exact and quadratic
@@ -2211,91 +2200,11 @@ def _render_breakevens(portfolio, market, contract, days, range_cents):
     high = min(high, base_price * search_pct)
 
     curve = breakeven_curve(portfolio, market, contract, days=days, low=low, high=high, extra_moves=roots)
-    factor = market.contract_multiplier / 1000
+    factor = charts.money_factor(market)
     curve["Exact $K"] = curve["Exact PnL"] * factor
     curve["Quadratic $K"] = curve["Quadratic PnL"].astype(float) * factor
-    curve["Profit"] = curve["Exact $K"].clip(lower=0)
-    curve["Loss"] = curve["Exact $K"].clip(upper=0)
 
-    x = alt.X("Futures Price:Q", title=f"{contract} futures price (¢/bu)", scale=alt.Scale(zero=False, nice=False))
-    y_title = f"P&L in {days} day{'s' if days != 1 else ''} ($K)"
-    base = alt.Chart(curve).encode(x=x)
-
-    shading = [
-        base.mark_area(color=color, opacity=0.18).encode(y=alt.Y(f"{column}:Q", title=y_title), y2=alt.datum(0))
-        for column, color in (("Profit", "#2e7d32"), ("Loss", "#c62828"))
-    ]
-
-    lines = (
-        alt.Chart(curve)
-        .transform_fold(["Exact $K", "Quadratic $K"], as_=["Curve", "PnL"])
-        .transform_filter("isValid(datum.PnL)")
-        .transform_calculate(Curve="datum.Curve == 'Exact $K' ? 'Exact' : 'Quadratic (estimate)'")
-        .mark_line(strokeWidth=2.5)
-        .encode(
-            x=x,
-            y=alt.Y("PnL:Q", title=y_title),
-            color=alt.Color(
-                "Curve:N",
-                scale=alt.Scale(domain=["Exact", "Quadratic (estimate)"], range=["#1f6fd1", "#ef8a17"]),
-                legend=alt.Legend(title=None, orient="top"),
-            ),
-            strokeDash=alt.StrokeDash(
-                "Curve:N",
-                scale=alt.Scale(domain=["Exact", "Quadratic (estimate)"], range=[[1, 0], [6, 4]]),
-                legend=None,
-            ),
-        )
-    )
-
-    zero = alt.Chart().mark_rule(color="gray", strokeWidth=1).encode(y=alt.datum(0))
-    current = pd.DataFrame({"Futures Price": [base_price], "Label": [f"Current {base_price:,.2f}"]})
-    current_rule = alt.Chart(current).mark_rule(color="gray", strokeDash=[3, 3]).encode(x=x)
-    current_text = (
-        alt.Chart(current)
-        .mark_text(align="left", dx=4, dy=-6, color="gray", baseline="bottom")
-        .encode(x=x, y=alt.value(12), text="Label:N")
-    )
-
-    layers = [*shading, zero, current_rule, current_text, lines]
-
-    visible = [r for r in roots if low <= r <= high]
-    if visible:
-        # Put each label on the side the curve isn't: up-left where P&L rises
-        # through zero, up-right where it falls.
-        rising = []
-        for r in visible:
-            after = curve.loc[curve["Move"] > r, "Exact PnL"]
-            rising.append(bool(len(after)) and after.iloc[0] > 0)
-        points = pd.DataFrame({
-            "Futures Price": [base_price + r for r in visible],
-            "Zero": [0.0] * len(visible),
-            "Label": [_breakeven_label(base_price, r) for r in visible],
-            "Rising": rising,
-        })
-        point_base = alt.Chart(points).encode(x=x, y=alt.Y("Zero:Q", title=y_title))
-        layers += [
-            point_base.mark_point(filled=True, size=90, color="black", stroke="white", strokeWidth=1.5),
-            point_base.transform_filter("datum.Rising")
-            .mark_text(align="right", dx=-8, dy=-10, fontWeight="bold").encode(text="Label:N"),
-            point_base.transform_filter("!datum.Rising")
-            .mark_text(align="left", dx=8, dy=-10, fontWeight="bold").encode(text="Label:N"),
-        ]
-
-    hover = alt.selection_point(fields=["Futures Price"], nearest=True, on="pointerover", empty=False)
-    layers += [
-        base.mark_rule(color="gray", opacity=0.6).encode(
-            opacity=alt.condition(hover, alt.value(0.6), alt.value(0)),
-            tooltip=[
-                alt.Tooltip("Futures Price:Q", title="Price (¢/bu)", format=",.2f"),
-                alt.Tooltip("Move:Q", title="Move (¢)", format="+.2f"),
-                alt.Tooltip("Exact $K:Q", title="Exact ($K)", format=",.2f"),
-                alt.Tooltip("Quadratic $K:Q", title="Quadratic ($K)", format=",.2f"),
-            ],
-        ).add_params(hover),
-    ]
-
-    st.altair_chart(alt.layer(*layers).properties(height=420), width="stretch")
+    st.altair_chart(charts.breakeven_chart(curve, roots, base_price, contract, days, low, high), width="stretch")
 
     if not any(True for _ in _option_legs(portfolio)):
         st.info("Futures only: P&L is a straight line with no time decay, so the breakeven is the current price.")
@@ -2303,10 +2212,10 @@ def _render_breakevens(portfolio, market, contract, days, range_cents):
     st.dataframe(
         pd.DataFrame(
             {
-                "Downside": [_breakeven_label(base_price, numeric["downside"]),
-                             _breakeven_label(base_price, quad["downside"])],
-                "Upside": [_breakeven_label(base_price, numeric["upside"]),
-                           _breakeven_label(base_price, quad["upside"])],
+                "Downside": [charts.breakeven_label(base_price, numeric["downside"]),
+                             charts.breakeven_label(base_price, quad["downside"])],
+                "Upside": [charts.breakeven_label(base_price, numeric["upside"]),
+                           charts.breakeven_label(base_price, quad["upside"])],
             },
             index=["Exact", "Quadratic (estimate)"],
         ),
@@ -2315,7 +2224,113 @@ def _render_breakevens(portfolio, market, contract, days, range_cents):
 
     others = [r for r in roots if r not in (numeric["downside"], numeric["upside"])]
     if others:
-        st.caption("Other crossings: " + ", ".join(_breakeven_label(base_price, r) for r in others))
+        st.caption("Other crossings: " + ", ".join(charts.breakeven_label(base_price, r) for r in others))
+
+
+_MAX_PAYOFF_STEPS = 8
+
+
+def _parse_time_steps(text):
+    """
+    Calendar-day steps from the Payoff box: whole days, 0 or more, without
+    duplicates, sorted, at most _MAX_PAYOFF_STEPS. Returns (steps, problems)
+    so a typo shows a message instead of breaking the tab.
+    """
+
+    steps, bad = [], []
+    for token in text.replace(";", ",").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            value = float(token)
+        except ValueError:
+            bad.append(token)
+            continue
+        if value < 0 or value != int(value):
+            bad.append(token)
+        elif int(value) not in steps:
+            steps.append(int(value))
+
+    steps.sort()
+    problems = []
+    if bad:
+        problems.append(
+            "Ignored " + ", ".join(f"'{b}'" for b in bad) + ": time steps must be whole days, 0 or more."
+        )
+    if len(steps) > _MAX_PAYOFF_STEPS:
+        problems.append(f"Showing the first {_MAX_PAYOFF_STEPS} of {len(steps)} time steps.")
+        steps = steps[:_MAX_PAYOFF_STEPS]
+    return steps, problems
+
+
+def _render_payoff(portfolio, market, contract, time_steps, range_pct):
+    """Payoff chart plus each curve's nearest breakeven on either side."""
+
+    base_price = market.price_for(contract)
+    curves = payoff_curves(portfolio, market, time_steps, contract, low_pct=-range_pct, high_pct=range_pct)
+    names = [f"T+{days}d" for days in time_steps] + ["At Expiry"]
+    curves[names] = curves[names] * charts.money_factor(market)
+
+    st.altair_chart(charts.payoff_chart(curves, base_price, contract, names), width="stretch")
+
+    option_days = [leg.expiry_days for leg in _option_legs(portfolio)]
+    past_expiry = [f"T+{days}d" for days in time_steps if option_days and days >= max(option_days)]
+    if past_expiry:
+        st.caption(f"{', '.join(past_expiry)} is past every option's expiry, so it matches At Expiry.")
+
+    prices = curves["Futures Price"].tolist()
+    table = {}
+    for name in names:
+        moves = [root - base_price for root in charts.crossings(prices, curves[name].tolist())]
+        down = [m for m in moves if m <= 0]
+        up = [m for m in moves if m > 0]
+        table[name] = {
+            "Downside": charts.breakeven_label(base_price, max(down) if down else None),
+            "Upside": charts.breakeven_label(base_price, min(up) if up else None),
+        }
+    st.dataframe(pd.DataFrame.from_dict(table, orient="index"), width="content")
+    st.caption("Nearest breakevens within the chart range, read off each curve. The Breakevens tab finds them exactly.")
+
+
+def _render_surface(portfolio, market, contract, metric, commodity):
+    surface = spot_vol_surface(portfolio, market, contract=contract, metric=metric, commodity=commodity)
+    surface = surface * charts.money_factor(market, metric)
+    unit = charts.UNITS.get(metric)
+    st.markdown(
+        f"**{metric}{f' ({unit})' if unit else ''}** across price move (¢) and vol shift (pts) -- "
+        f"{f'{commodity} Summary' if commodity else contract}"
+    )
+    st.altair_chart(charts.surface_chart(surface, metric), width="stretch")
+    st.caption("Higher prices are at the top. The outlined cell is today: no price move, no vol shift.")
+
+
+_STRESS_AXES = (("price", "price"), ("time", "time"), ("vol", "vol"))
+
+
+def _render_stress(portfolio, market, contract):
+    report = stress_report(portfolio, market, contract=contract, include_base=True)
+    for greek in ("Delta", "Gamma", "Vega", "Theta"):
+        columns = st.columns(3)
+        for column, (axis, label) in zip(columns, _STRESS_AXES):
+            table = report.get(f"{greek.lower()}_{axis}")
+            if table is None:
+                continue
+            table = table * charts.money_factor(market, greek)
+            with column:
+                st.markdown(f"**{greek} vs {label}**")
+                st.altair_chart(
+                    charts.stress_chart(table, greek, table.index.name, charts.UNITS.get(greek)), width="stretch"
+                )
+    st.caption("The ringed point is today, with no stress applied.")
+
+
+def _strike_map_commodities(portfolio):
+    held = {
+        _commodity_from_contract(leg.contract, fallback=None)
+        for leg in _option_legs(portfolio)
+    }
+    return [name for name in COMMODITIES if name in held]
 
 
 # --- main area ---
@@ -2378,6 +2393,7 @@ _TAB_INPUT_DEFAULTS = {
     "decay_horizon": 30, "decay_step": 2,
     "payoff_steps": "0,30,60",
     "be_days": 1, "be_range": 30,
+    "payoff_range": 10,
 }
 _TAB_SELECTOR_OPTIONS = {
     **{k: set(_contracts_in_portfolio(portfolio)) for k in (
@@ -2410,6 +2426,7 @@ _TAB_SELECTOR_OPTIONS = {
     "decay_compare_metric": set(DECAY_LADDER_LABELS),
     "surface_metric": None,
     "strike_weight": None,
+    "strike_commodity": set(_strike_map_commodities(portfolio)),
 }
 for _key, _default in _TAB_INPUT_DEFAULTS.items():
     st.session_state[_key] = st.session_state.get(_key, _default)
@@ -2915,7 +2932,8 @@ with tabs[4]:
         _tab_help(
             "A heatmap of P&L or a chosen Greek across price and vol at the same time, "
             "so combined moves are visible at a glance. A commodity summary shows only that "
-            "commodity's positions, with parallel price and volatility moves across its contracts."
+            "commodity's positions, with parallel price and volatility moves across its contracts. "
+            "Hover over a cell for its exact value."
         )
 
         surface_controls, surface_chart = st.columns([1, 4], gap="small")
@@ -2932,12 +2950,7 @@ with tabs[4]:
             )
             surface_contract = None if is_commodity_summary else surface_selection
             with surface_chart:
-                plot_surface(
-                    portfolio, market, contract=surface_contract,
-                    metric=metric, commodity=surface_commodity,
-                )
-                st.pyplot(plt.gcf(), use_container_width=False)
-                plt.close()
+                _render_surface(portfolio, market, surface_contract, metric, surface_commodity)
 
 with tabs[5]:
     if tab_open[5]:
@@ -2953,9 +2966,7 @@ with tabs[5]:
         fs_contract = _contract_selector("fs_stress") if has_positions else None
 
         if fs_contract:
-            plot_stress_report(portfolio, market, contract=fs_contract)
-            st.pyplot(plt.gcf())
-            plt.close()
+            _render_stress(portfolio, market, fs_contract)
 
 with tabs[6]:
     if tab_open[6]:
@@ -2968,18 +2979,25 @@ with tabs[6]:
         )
 
         strike_controls, strike_chart = st.columns([1, 4], gap="small")
+        strike_commodities = _strike_map_commodities(portfolio)
         with strike_controls:
             weight = st.radio("Weight", ["quantity", "delta"], horizontal=True, key="strike_weight")
+            strike_commodity = (
+                st.selectbox("Commodity", strike_commodities, key="strike_commodity")
+                if strike_commodities else None
+            )
 
         if has_positions:
-            grid = strike_map(portfolio, market=market if weight == "delta" else None, weight=weight)
-            if grid.empty:
+            if not strike_commodity:
                 st.info("No option legs yet -- Strike Map excludes futures, which have no strike.")
             else:
+                grid = strike_map(
+                    portfolio, market=market if weight == "delta" else None, weight=weight,
+                    commodity=strike_commodity, fill_value=None,
+                )
                 with strike_chart:
-                    plot_strike_map(portfolio, market=market if weight == "delta" else None, weight=weight)
-                    st.pyplot(plt.gcf(), use_container_width=False)
-                    plt.close()
+                    st.altair_chart(charts.strike_map_chart(grid, weight), width="stretch")
+                    st.caption("Higher strikes are at the top. Blank cells have no position.")
 
 with tabs[7]:
     if tab_open[7]:
@@ -2988,20 +3006,25 @@ with tabs[7]:
         _tab_help(
             "Profit/loss against the futures price, at chosen calendar days forward. A time step of 0 is today; "
             "larger steps show the position closer to expiry, keeping remaining time value. Calendar days "
-            "are used, not trading days."
+            "are used, not trading days. The dashed grey line is the payoff at expiry (intrinsic value only). "
+            "Hover to read every curve at a price; click a legend entry to highlight that curve (click the "
+            "chart background to show all again). Dots mark where each curve crosses zero."
         )
 
         payoff_controls, payoff_chart = st.columns([1, 4], gap="small")
         with payoff_controls:
             fs_contract = _contract_selector("fs_payoff") if has_positions else None
             time_steps_str = st.text_input("Time steps (calendar days, comma-separated)", key="payoff_steps")
-            time_steps = [int(x.strip()) for x in time_steps_str.split(",") if x.strip()]
+            payoff_range = float(
+                st.number_input("Range (± %)", min_value=1, max_value=50, step=1, key="payoff_range")
+            )
+            time_steps, step_problems = _parse_time_steps(time_steps_str)
+            for problem in step_problems:
+                st.warning(problem)
 
-        if fs_contract and time_steps:
-            with payoff_chart:
-                plot_payoff(portfolio, market, time_steps=time_steps, contract=fs_contract)
-                st.pyplot(plt.gcf(), use_container_width=False)
-                plt.close()
+        if fs_contract:
+            with payoff_chart, st.spinner("Pricing payoff..."):
+                _render_payoff(portfolio, market, fs_contract, time_steps, payoff_range)
 
 with tabs[8]:
     if tab_open[8]:

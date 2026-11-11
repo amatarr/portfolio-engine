@@ -747,6 +747,41 @@ def payoff_diagram(
     return pd.DataFrame(rows)
 
 
+def payoff_curves(portfolio, market, time_steps, contract=None, low_pct=-10, high_pct=10, points=81):
+    """
+    Same curves as payoff_diagram plus the at-expiry payoff, on a finer
+    grid for charting: P&L at each futures price from low_pct to high_pct
+    of the current price, one "T+<n>d" column per time step and an
+    "At Expiry" column (pure intrinsic value, as payoff_at_expiry). The
+    book is shifted forward once per time step rather than once per point.
+    """
+
+    current_value = portfolio.value(market)
+    base_price = market.price_for(contract)
+    shifted = {days: shift_time(portfolio, days) for days in time_steps}
+
+    pcts = [low_pct + i * (high_pct - low_pct) / (points - 1) for i in range(points)]
+    if low_pct < 0 < high_pct:
+        pcts = sorted(set(pcts) | {0.0})
+
+    rows = []
+
+    for pct in pcts:
+
+        spot = base_price * (1 + pct / 100)
+        shocked_market = _bump_contract_price(market, contract, spot)
+
+        row = {"Spot Move %": pct, "Move": spot - base_price, "Futures Price": spot}
+
+        for days, shifted_portfolio in shifted.items():
+            row[f"T+{days}d"] = shifted_portfolio.value(shocked_market) - current_value
+
+        row["At Expiry"] = _intrinsic_portfolio_value(portfolio, market, contract, spot) - current_value
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
 def report_by_tenor(portfolio, market, contract=None, by_contract=False, commodity=None):
     """
     GreekEngine.report_dollars(), grouped by underlying futures contract.
@@ -922,7 +957,7 @@ _STRESS_AXIS_LABELS = {
 }
 
 
-def stress_table(portfolio, market, greek, axis, magnitudes, contract=None):
+def stress_table(portfolio, market, greek, axis, magnitudes, contract=None, include_base=False):
     """
     Stress one variable at a time, hold others constant, read off one
     Greek's value at each stress level.
@@ -936,6 +971,7 @@ def stress_table(portfolio, market, greek, axis, magnitudes, contract=None):
            "vol"   (vol points added to `contract`'s own legs, +/- each
                      magnitude)
     magnitudes: list of positive levels, e.g. [5, 10, 15, 20]
+    include_base: also add the unstressed level 0 (today's value), for charting
     """
 
     if greek not in _STRESS_GREEKS:
@@ -948,9 +984,9 @@ def stress_table(portfolio, market, greek, axis, magnitudes, contract=None):
     base_price = market.price_for(contract)
 
     if axis == "time":
-        levels = list(magnitudes)
+        levels = ([0] if include_base else []) + list(magnitudes)
     else:
-        levels = [-m for m in reversed(magnitudes)] + list(magnitudes)
+        levels = [-m for m in reversed(magnitudes)] + ([0] if include_base else []) + list(magnitudes)
 
     rows = []
 
@@ -982,7 +1018,8 @@ def stress_report(
     contract=None,
     price_magnitudes=(5, 10, 15, 20),
     time_magnitudes=(5, 10, 15, 20),
-    vol_magnitudes=(1, 2, 3, 4)
+    vol_magnitudes=(1, 2, 3, 4),
+    include_base=False,
 ):
     """
     Runs the full required stress grid in one call:
@@ -1008,12 +1045,12 @@ def stress_report(
     ]
 
     return {
-        f"{greek}_{axis}": stress_table(portfolio, market, greek, axis, magnitudes, contract)
+        f"{greek}_{axis}": stress_table(portfolio, market, greek, axis, magnitudes, contract, include_base)
         for greek, axis, magnitudes in combos
     }
 
 
-def strike_map(portfolio, market=None, weight="quantity"):
+def strike_map(portfolio, market=None, weight="quantity", commodity=None, fill_value=0):
     """
     Pivot table: rows = strike, columns = expiry_days, cell = aggregated
     quantity (or net delta if weight="delta") across legs sharing that
@@ -1021,6 +1058,10 @@ def strike_map(portfolio, market=None, weight="quantity"):
     legs have no strike and are excluded. Delta weighting uses each leg's
     own contract (no single "Future Spot" selection needed here, since this
     view spans every contract in the book at once).
+
+    commodity limits the map to that commodity's legs (strikes of different
+    commodities aren't comparable on one axis). fill_value=None leaves
+    strike/expiry pairs with no position as NaN instead of 0.
     """
 
     if weight not in ("quantity", "delta"):
@@ -1028,6 +1069,9 @@ def strike_map(portfolio, market=None, weight="quantity"):
 
     if weight == "delta" and market is None:
         raise ValueError("market is required for weight='delta'")
+
+    if commodity is not None:
+        portfolio = _portfolio_for_commodity(portfolio, commodity)
 
     rows = []
 
@@ -1057,5 +1101,5 @@ def strike_map(portfolio, market=None, weight="quantity"):
         columns="Expiry",
         values="Value",
         aggfunc="sum",
-        fill_value=0
+        fill_value=fill_value
     )

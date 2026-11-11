@@ -123,6 +123,15 @@ selected contract's price, with the exact repriced curve, the quadratic Delta/Ga
 (drawn within 10% of the price), green/red profit and loss shading, and every zero crossing marked.
 Hover to read the P&L at any price. The table gives the nearest breakeven on each side as a price and
 a move in cents; the chart range (default ±30¢) widens to include them.
+
+All analysis charts are interactive (Altair, built in `vol_calculator/charts.py`; `plotting.py` keeps the
+matplotlib versions for `demo.py`). Hover readouts run in the browser without rerunning the app.
+**Payoff** draws each time step and the at-expiry payoff (dashed grey) over a ±% range (default 10%),
+marks each curve's zero crossings, lists the nearest ones in a table, and lets you click a legend entry
+to highlight a curve; invalid time steps show a warning. **Surface** is a heatmap with higher prices at
+the top and today's cell outlined. **Strike Map** shows one commodity at a time, higher strikes on top,
+with blank cells where there is no position. **Stress** shows one chart per Greek and stressed variable,
+with today's unstressed point ringed.
 The **Surface** view also offers a commodity summary, showing only that commodity's positions with
 price and volatility moves applied in parallel across its contracts.
 
