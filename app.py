@@ -2476,7 +2476,7 @@ if any(_is_expired_option(leg) for leg in _option_legs(portfolio)):
 # every run (defaults set here, not on the widgets) to survive tab switches.
 _TAB_INPUT_DEFAULTS = {
     "spot_low": -20, "spot_high": 20, "spot_step": 2,
-    "vol_low": -5, "vol_high": 5, "vol_step": 1,
+    "vol_low": -5, "vol_high": 5, "vol_step": 1.0,
     "decay_horizon": 30, "decay_step": 2,
     "payoff_steps": "0,30,60",
     "be_days": 1, "be_range": 30,
@@ -2517,6 +2517,7 @@ _TAB_SELECTOR_OPTIONS = {
 }
 for _key, _default in _TAB_INPUT_DEFAULTS.items():
     st.session_state[_key] = st.session_state.get(_key, _default)
+st.session_state["vol_step"] = float(st.session_state["vol_step"])
 for _key, _options in _TAB_SELECTOR_OPTIONS.items():
     if _key in st.session_state:
         if _options is not None and st.session_state[_key] not in _options:
@@ -2827,7 +2828,13 @@ with tabs[2]:
         vol_inputs = st.columns([1, 1, 1, 5], gap="small")
         vol_low = vol_inputs[0].number_input("Low (pts)", step=1, key="vol_low")
         vol_high = vol_inputs[1].number_input("High (pts)", step=1, key="vol_high")
-        vol_step = vol_inputs[2].number_input("Step (pts)", step=1, key="vol_step")
+        vol_step = vol_inputs[2].number_input(
+            "Step (pts)",
+            min_value=0.1,
+            step=0.1,
+            format="%.1f",
+            key="vol_step",
+        )
 
         if vol_selection:
             if vol_selection.startswith("__commodity_summary__:"):

@@ -1,5 +1,6 @@
 import copy
 import math
+from decimal import Decimal
 
 import pandas as pd
 from scipy.optimize import brentq
@@ -12,6 +13,22 @@ from vol_calculator.contracts import (
     commodity_from_contract,
     option_expiry_candidates,
 )
+
+
+def _vol_shift_points(low, high, step):
+    """Generate inclusive volatility shifts without accumulating float error."""
+
+    low = Decimal(str(low))
+    high = Decimal(str(high))
+    step = Decimal(str(step))
+    if step <= 0:
+        raise ValueError("Volatility ladder step must be greater than zero.")
+
+    if high < low:
+        return []
+
+    count = int((high - low) // step) + 1
+    return [float(low + index * step) for index in range(count)]
 
 
 def _bump_contract_price(market, contract, new_price):
@@ -174,7 +191,7 @@ def vol_ladder(
 
     current_value = portfolio.value(market)
 
-    for vol_shift in range(low, high + step, step):
+    for vol_shift in _vol_shift_points(low, high, step):
 
         shocked_portfolio = shift_portfolio_vols(portfolio, vol_shift / 100, contract)
 
@@ -204,7 +221,7 @@ def commodity_vol_ladder(portfolio, market, commodity, low=-10, high=10, step=2,
     current_value = commodity_portfolio.value(market)
     rows = []
 
-    for vol_shift in range(low, high + step, step):
+    for vol_shift in _vol_shift_points(low, high, step):
         shift = vol_shift / 100
         shocked = Portfolio()
         for leg in commodity_portfolio.positions:
@@ -256,7 +273,7 @@ def vol_ladder_by_underlying(portfolio, market, commodity, metric, low=-10, high
         )
         rows[contract] = ladder[metric].tolist()
 
-    shifts = list(range(low, high + step, step))
+    shifts = _vol_shift_points(low, high, step)
     return pd.DataFrame.from_dict(rows, orient="index", columns=shifts)
 
 
