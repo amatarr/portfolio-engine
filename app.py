@@ -93,6 +93,10 @@ st.markdown(
         background-color: #cfe8fc; border-radius: 8px; padding: 0.35rem 0.5rem;
         width: fit-content; max-width: 100%;
     }
+    .st-key-current_positions_section {
+        margin-left: auto;
+        margin-right: auto;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -733,6 +737,7 @@ def _switch_user():
     if _store_available():
         st.session_state.portfolio, st.session_state.position_meta = _load_autosaved_portfolio()
         st.session_state.position_remove_selection.clear()
+        st.session_state.setdefault("position_expanded_groups", set()).clear()
 
 
 def _autosave_portfolio():
@@ -1337,6 +1342,7 @@ def _render_saved_portfolios():
             if loaded is not None:
                 st.session_state.portfolio, st.session_state.position_meta = loaded
                 st.session_state.position_remove_selection.clear()
+                st.session_state.setdefault("position_expanded_groups", set()).clear()
                 _autosave_portfolio()
                 st.rerun()
         if choice[0] == user and delete_col.button("Delete", key="delete_saved_btn"):
@@ -1352,8 +1358,10 @@ def _render_positions():
     """
 
     selected_position_indices = st.session_state.setdefault("position_remove_selection", set())
+    expanded_groups = st.session_state.setdefault("position_expanded_groups", set())
     if not st.session_state.portfolio.positions:
         selected_position_indices.clear()
+        expanded_groups.clear()
         st.caption("No positions.")
         return
 
@@ -1419,182 +1427,98 @@ def _render_positions():
                     f"{current_vols[0]:.2f}" if vol_is_shared and current_vols
                     else (None if not current_vols else "Mixed")
                 ),
-                "Lots": len(rows),
+                "Trade Count": len(rows),
             })
 
         st.caption(
             "Summary rows net identical instruments; long and short quantities are shown separately. "
-            "Weighted averages use absolute quantity. Expand a row below to edit its lots; Current Vol "
+            "Weighted averages use absolute quantity. Expand a summary row inline to edit its lots; Current Vol "
             "edits apply to all matching option lots."
         )
-        summary_table = pd.DataFrame(summary_rows).style.map(
-            _red_if_negative, subset=["Quantity (net)", "Short Qty"]
-        )
-        st.dataframe(
-            summary_table,
-            hide_index=True,
-            width="content",
-            column_config={
-                "Strike": st.column_config.NumberColumn("Strike", format="%.0f"),
-                "Quantity (net)": st.column_config.NumberColumn(
-                    "Quantity (net)", format="%g"
-                ),
-                "Long Qty": st.column_config.NumberColumn("Long Qty", format="%g"),
-                "Short Qty": st.column_config.NumberColumn("Short Qty", format="%g"),
-                "Entry Price (wtd)": st.column_config.NumberColumn(
-                    "Entry Price (wtd)", format="%.2f"
-                ),
-                "Reference Price (wtd)": st.column_config.NumberColumn(
-                    "Reference Price (wtd)", format="%.2f"
-                ),
-                "TheoV (wtd)": st.column_config.NumberColumn("TheoV (wtd)", format="%.2f"),
-                "Underlying Price": st.column_config.NumberColumn(
-                    "Underlying Price", format="%.2f"
-                ),
-                "Expiry (d)": st.column_config.TextColumn("Expiry (d)"),
-                "Entry Vol (%) (wtd)": st.column_config.NumberColumn(
-                    "Entry Vol (%) (wtd)", format="%.2f"
-                ),
-                "Current Vol (%)": st.column_config.TextColumn("Current Vol (%)"),
-            },
-        )
+        summary_columns = [
+            ("Contract", 1.0),
+            ("Type", 0.65),
+            ("Strike", 0.55),
+            ("Quantity (net)", 0.9),
+            ("Long Qty", 0.7),
+            ("Short Qty", 0.7),
+            ("Entry Price (wtd)", 1.0),
+            ("Reference Price (wtd)", 1.1),
+            ("TheoV (wtd)", 0.8),
+            ("Underlying Price", 1.0),
+            ("Expiry (d)", 0.85),
+            ("Entry Vol (%) (wtd)", 1.25),
+            ("Current Vol (%)", 1.05),
+            ("Trade Count", 0.85),
+        ]
+        summary_widths = [0.35] + [width for _, width in summary_columns]
+        with st.container(key="positions_summary_header"):
+            header_columns = st.columns(summary_widths, gap="xxsmall")
+            header_columns[0].caption("")
+            for column, (name, _) in zip(header_columns[1:], summary_columns):
+                column.caption(name)
 
         for group_number, (risk_key, rows) in enumerate(grouped_rows.items()):
-            first = rows[0]
-            net_quantity = sum(
-                float(row["Quantity"]) for row in rows if pd.notna(row["Quantity"])
-            )
-            days = first["Expiry (d)"]
-            expiry_label = "Expired" if first["Expired"] else (
-                f"{int(days)}d" if pd.notna(days) else "N/A"
-            )
-            label = (
-                f"{first['Contract']} {first['Type']}"
-                + (f" {first['Strike']:g}" if pd.notna(first["Strike"]) else "")
-                + f" | {expiry_label} | net {net_quantity:g} | {len(rows)} lot(s)"
-            )
-            with st.expander(label, expanded=False):
-                group_table = pd.DataFrame(rows)
-                editor_table = group_table.drop(columns=["#", "_Leg", "Expired"]).copy()
-                position_indices = [int(row["#"]) for row in rows]
-                editor_table["Remove"] = [
-                    position_index in selected_position_indices
-                    for position_index in position_indices
-                ]
-                editor_table["Expiry (d)"] = [
-                    "Expired" if row["Expired"] else (
-                        str(int(row["Expiry (d)"])) if pd.notna(row["Expiry (d)"]) else "None"
+            group_state_key = (group_commodity, risk_key)
+            is_expanded = group_state_key in expanded_groups
+            with st.container(border=True):
+                with st.container(key=f"positions_summary_row_{group_number}"):
+                    row_columns = st.columns(summary_widths, gap="xxsmall")
+                    if row_columns[0].button(
+                        "-" if is_expanded else "+",
+                        key=f"positions_expand_{group_commodity}_{group_number}_{hash(risk_key)}",
+                        help="Collapse lot details" if is_expanded else "Expand lot details",
+                    ):
+                        if is_expanded:
+                            expanded_groups.discard(group_state_key)
+                        else:
+                            expanded_groups.add(group_state_key)
+                        is_expanded = group_state_key in expanded_groups
+
+                    summary = summary_rows[group_number]
+                    for column, (name, _) in zip(row_columns[1:], summary_columns):
+                        value = summary[name]
+                        if value is None or pd.isna(value):
+                            display_value = "None"
+                        elif name == "Strike":
+                            display_value = f"{float(value):.0f}"
+                        elif name in ("Quantity (net)", "Long Qty", "Short Qty"):
+                            display_value = f"{float(value):g}"
+                        elif name in (
+                            "Entry Price (wtd)", "Reference Price (wtd)", "TheoV (wtd)",
+                            "Underlying Price", "Entry Vol (%) (wtd)",
+                        ):
+                            display_value = f"{float(value):.2f}"
+                        elif name == "Trade Count":
+                            display_value = str(int(value))
+                        else:
+                            display_value = str(value)
+
+                        if (
+                            name in ("Quantity (net)", "Short Qty")
+                            and pd.notna(value)
+                            and float(value) < 0
+                        ):
+                            column.markdown(f":red[{display_value}]")
+                        elif name in (
+                            "Expiry (d)", "Entry Vol (%) (wtd)",
+                            "Current Vol (%)", "Trade Count",
+                        ):
+                            column.markdown(
+                                f"<div style='text-align: center'>{display_value}</div>",
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            column.write(display_value)
+
+                if is_expanded:
+                    _render_position_lot_editor(
+                        group_commodity,
+                        group_number,
+                        risk_key,
+                        rows,
+                        selected_position_indices,
                     )
-                    for row in rows
-                ]
-                styled_editor_table = (
-                    editor_table.style
-                    .map(_red_if_negative, subset=["Quantity"])
-                    .apply(
-                        lambda row: (
-                            ["color: #9e9e9e"] * len(row)
-                            if group_table.loc[row.name, "Expired"] else [""] * len(row)
-                        ),
-                        axis=1,
-                    )
-                )
-                editor_key_rows = tuple(
-                    (
-                        int(row["#"]), int(row["_Leg"]), row["Contract"], row["Type"],
-                        row["Strike"], row["Expiry (d)"], row["Entry Vol (%)"],
-                        row["Current Vol (%)"], row["Reference Price"],
-                        row["Underlying Price"],
-                    )
-                    for row in rows
-                )
-                editor_row_map = tuple(
-                    (int(row["#"]), int(row["_Leg"]), row["Contract"])
-                    for row in rows
-                )
-                selected_in_editor = tuple(
-                    sorted(set(position_indices).intersection(selected_position_indices))
-                )
-                editor_key = (
-                    f"positions_editor_{group_commodity}_{group_number}_"
-                    f"{hash((risk_key, editor_key_rows, selected_in_editor))}"
-                )
-                st.data_editor(
-                    styled_editor_table,
-                    hide_index=True,
-                    width="content",
-                    height=min(38 * (len(rows) + 1), 400),
-                    row_height=32,
-                    disabled=[
-                        column for column in editor_table.columns
-                        if column not in (
-                            "Quantity", "Entry Price", "Reference Price", "Current Vol (%)",
-                            "Underlying Price", "Remove",
-                        )
-                    ],
-                    column_order=[
-                        "Contract", "Type", "Strike", "Quantity", "Entry Price",
-                        "Reference Price", "TheoV", "Underlying Price", "Structure",
-                        "Expiry (d)", "First Notice", "Entry Vol (%)", "Current Vol (%)",
-                        "Remove",
-                    ],
-                    key=editor_key,
-                    on_change=_handle_position_editor_change,
-                    args=(editor_key, editor_row_map),
-                    column_config={
-                        "Quantity": st.column_config.NumberColumn(
-                            "Quantity",
-                            help="Edit this lot's signed open quantity.",
-                            format="%g",
-                            step=1,
-                            required=True,
-                        ),
-                        "Entry Price": st.column_config.NumberColumn(
-                            "Entry Price",
-                            help="Edit the price paid or received for this position.",
-                            format="%.2f",
-                            step=0.25,
-                            required=True,
-                        ),
-                        "Reference Price": st.column_config.NumberColumn(
-                            "Reference Price",
-                            help="Underlying price when the option position was entered.",
-                            format="%.2f",
-                            step=0.25,
-                        ),
-                        "Underlying Price": st.column_config.NumberColumn(
-                            "Underlying Price",
-                            help=(
-                                "Edit the market price used to value positions on this contract. "
-                                "A new live quote may update it again."
-                            ),
-                            format="%.2f",
-                            step=0.25,
-                            required=True,
-                        ),
-                        "Current Vol (%)": st.column_config.NumberColumn(
-                            "Current Vol (%)",
-                            help="Used for pricing and Greeks; edits update all matching option lots.",
-                            format="%.2f",
-                            step=0.01,
-                            min_value=0.01,
-                        ),
-                        "Entry Vol (%)": st.column_config.NumberColumn(
-                            "Entry Vol (%)",
-                            help="Volatility when this lot was entered; shown for reference.",
-                            format="%.2f",
-                        ),
-                        "Remove": st.column_config.CheckboxColumn(
-                            "Remove",
-                            help="Select rows to remove, then use the button below.",
-                        ),
-                        "Strike": st.column_config.NumberColumn("Strike", format="%.0f"),
-                        "TheoV": st.column_config.NumberColumn("TheoV", format="%.2f"),
-                        "Expiry (d)": st.column_config.TextColumn("Expiry (d)"),
-                        "First Notice": st.column_config.DateColumn(
-                            "First Notice", format="YYYY-MM-DD"
-                        ),
-                    },
-                )
 
         position_indices = [int(position_index) for position_index in table["#"]]
 
@@ -1610,8 +1534,139 @@ def _render_positions():
                 st.session_state.portfolio.positions.pop(i)
                 st.session_state.position_meta.pop(i)
             selected_position_indices.clear()
+            st.session_state.setdefault("position_expanded_groups", set()).clear()
             _autosave_portfolio()
             st.rerun()
+
+
+def _render_position_lot_editor(
+    group_commodity,
+    group_number,
+    risk_key,
+    rows,
+    selected_position_indices,
+):
+    group_table = pd.DataFrame(rows)
+    editor_table = group_table.drop(columns=["#", "_Leg", "Expired"]).copy()
+    position_indices = [int(row["#"]) for row in rows]
+    editor_table["Remove"] = [
+        position_index in selected_position_indices
+        for position_index in position_indices
+    ]
+    editor_table["Expiry (d)"] = [
+        "Expired" if row["Expired"] else (
+            str(int(row["Expiry (d)"])) if pd.notna(row["Expiry (d)"]) else "None"
+        )
+        for row in rows
+    ]
+    styled_editor_table = (
+        editor_table.style
+        .map(_red_if_negative, subset=["Quantity"])
+        .apply(
+            lambda row: (
+                ["color: #9e9e9e"] * len(row)
+                if group_table.loc[row.name, "Expired"] else [""] * len(row)
+            ),
+            axis=1,
+        )
+    )
+    editor_key_rows = tuple(
+        (
+            int(row["#"]), int(row["_Leg"]), row["Contract"], row["Type"],
+            row["Strike"], row["Expiry (d)"], row["Entry Vol (%)"],
+            row["Current Vol (%)"], row["Reference Price"],
+            row["Underlying Price"],
+        )
+        for row in rows
+    )
+    editor_row_map = tuple(
+        (int(row["#"]), int(row["_Leg"]), row["Contract"])
+        for row in rows
+    )
+    selected_in_editor = tuple(
+        sorted(set(position_indices).intersection(selected_position_indices))
+    )
+    editor_key = (
+        f"positions_editor_{group_commodity}_{group_number}_"
+        f"{hash((risk_key, editor_key_rows, selected_in_editor))}"
+    )
+    st.data_editor(
+        styled_editor_table,
+        hide_index=True,
+        width="content",
+        height=min(38 * (len(rows) + 1), 400),
+        row_height=32,
+        disabled=[
+            column for column in editor_table.columns
+            if column not in (
+                "Quantity", "Entry Price", "Reference Price", "Current Vol (%)",
+                "Underlying Price", "Remove",
+            )
+        ],
+        column_order=[
+            "Contract", "Type", "Strike", "Quantity", "Entry Price",
+            "Reference Price", "TheoV", "Underlying Price", "Structure",
+            "Expiry (d)", "First Notice", "Entry Vol (%)", "Current Vol (%)",
+            "Remove",
+        ],
+        key=editor_key,
+        on_change=_handle_position_editor_change,
+        args=(editor_key, editor_row_map),
+        column_config={
+            "Quantity": st.column_config.NumberColumn(
+                "Quantity",
+                help="Edit this lot's signed open quantity.",
+                format="%g",
+                step=1,
+                required=True,
+            ),
+            "Entry Price": st.column_config.NumberColumn(
+                "Entry Price",
+                help="Edit the price paid or received for this position.",
+                format="%.2f",
+                step=0.25,
+                required=True,
+            ),
+            "Reference Price": st.column_config.NumberColumn(
+                "Reference Price",
+                help="Underlying price when the option position was entered.",
+                format="%.2f",
+                step=0.25,
+            ),
+            "Underlying Price": st.column_config.NumberColumn(
+                "Underlying Price",
+                help=(
+                    "Edit the market price used to value positions on this contract. "
+                    "A new live quote may update it again."
+                ),
+                format="%.2f",
+                step=0.25,
+                required=True,
+            ),
+            "Current Vol (%)": st.column_config.NumberColumn(
+                "Current Vol (%)",
+                help="Used for pricing and Greeks; edits update all matching option lots.",
+                format="%.2f",
+                step=0.01,
+                min_value=0.01,
+            ),
+            "Entry Vol (%)": st.column_config.NumberColumn(
+                "Entry Vol (%)",
+                help="Volatility when this lot was entered; shown for reference.",
+                format="%.2f",
+            ),
+            "Remove": st.column_config.CheckboxColumn(
+                "Remove",
+                help="Select rows to remove, then use the button below.",
+            ),
+            "Strike": st.column_config.NumberColumn("Strike", format="%.0f"),
+            "TheoV": st.column_config.NumberColumn("TheoV", format="%.2f"),
+            "Expiry (d)": st.column_config.TextColumn("Expiry (d)"),
+            "First Notice": st.column_config.DateColumn(
+                "First Notice", format="YYYY-MM-DD"
+            ),
+        },
+    )
 
 
 # The user name lives in the URL (?user=...) so a refresh or bookmark keeps it.
@@ -1993,6 +2048,7 @@ with st.container(border=True):
                         st.session_state.portfolio = Portfolio()
                         st.session_state.position_meta = []
                         st.session_state.position_remove_selection.clear()
+                        st.session_state.setdefault("position_expanded_groups", set()).clear()
                         st.session_state.csv_locked_contracts = set()
                         _autosave_portfolio()
                         st.rerun()
@@ -2014,6 +2070,7 @@ with st.container(border=True):
                                 st.session_state.portfolio, saved_meta,
                             )
                             st.session_state.position_remove_selection.clear()
+                            st.session_state.setdefault("position_expanded_groups", set()).clear()
                             _autosave_portfolio()
                             st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
                             st.rerun()
@@ -2076,8 +2133,9 @@ with st.container(border=True):
             _render_saved_portfolios()
 
     st.divider()
-    st.subheader("Current Positions")
-    _render_positions()
+    with st.container(key="current_positions_section", width=1600):
+        st.subheader("Current Positions")
+        _render_positions()
 
 
 def _contracts_in_portfolio(portfolio):
@@ -2360,6 +2418,7 @@ if _unpriced:
         portfolio.positions = [portfolio.positions[i] for i in keep_idx]
         st.session_state.position_meta = [st.session_state.position_meta[i] for i in keep_idx]
         st.session_state.position_remove_selection.clear()
+        st.session_state.setdefault("position_expanded_groups", set()).clear()
         _autosave_portfolio()
         st.warning(
             f"Removed position(s) with no price available anywhere (not in the uploaded file "

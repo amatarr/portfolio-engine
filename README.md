@@ -74,8 +74,12 @@ removes the full structure.
 Current Positions now starts with a compact summary grouped by risk instrument: futures by contract,
 and options by underlying contract, call/put, strike, and expiry. Summary quantities are net; Entry
 Price, Reference Price, Entry Vol, and TheoV are absolute-quantity-weighted averages for context.
-Summary rows and their expandable detail groups sort by numeric Expiry (d), ascending; expired
-positions appear first and positions without a defined expiry appear last.
+Each summary row has an inline expand/collapse control; its editable lot table appears directly below
+that row. Summary rows sort by numeric Expiry (d), ascending; expired positions appear first and
+positions without a defined expiry appear last. This uses native Streamlit columns rather than a
+dedicated tree-grid component, so the summary rows do not have interactive column sorting or resizing.
+The positions section is centered and capped at 1600 pixels wide, with compact gaps between summary
+columns; Expiry, Entry Vol, Current Vol, and Trade Count values are centered below their headers.
 Current Vol edits in the detail table apply to every matching option lot, while Greek calculations
 continue to use the underlying positions. Legacy lots with different Current Vol values are marked
 "Mixed" in the summary until edited to a shared value.
