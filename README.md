@@ -24,6 +24,8 @@ app_password = "your-password-here"
 
 On Streamlit Community Cloud, set the same key under the app's Settings > Secrets instead of committing
 a secrets file.
+The login is presented in a centered card with a high-contrast password field and submit button.
+Submitting the password form with either the Enter key or the button attempts authentication.
 
 Monetary values in the Greek summary, analysis ladders (including their CSV downloads), surface,
 stress charts, and payoff chart are displayed in thousands of dollars ($K), using the configured

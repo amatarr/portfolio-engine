@@ -97,6 +97,28 @@ st.markdown(
         margin-left: auto;
         margin-right: auto;
     }
+    .st-key-login_card [data-testid="stTextInput"] {
+        max-width: 100%;
+    }
+    .st-key-login_card [data-testid="stTextInput"] input {
+        background-color: #ffffff;
+        border: 1px solid #8994a5;
+    }
+    .st-key-login_card [data-testid="stTextInput"] input:focus {
+        border-color: #1f4e79;
+        box-shadow: 0 0 0 1px #1f4e79;
+    }
+    .st-key-login_submit button {
+        width: 100%;
+        background-color: #1f4e79;
+        color: #ffffff;
+        border-color: #173a5a;
+    }
+    .st-key-login_submit button:hover {
+        background-color: #173a5a;
+        color: #ffffff;
+        border-color: #102b43;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -174,15 +196,21 @@ def _require_password():
         st.session_state.authenticated = True
         return
 
-    st.title("Vol Calculator")
-    password = st.text_input("Password", type="password")
+    _, login_column, _ = st.columns([1, 1.25, 1])
+    with login_column:
+        with st.container(key="login_card", border=True):
+            with st.form("login_form"):
+                st.title("Vol Calculator")
+                password = st.text_input("Password", type="password", key="login_password")
 
-    if st.button("Enter"):
-        if password == configured_password:
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Incorrect password.")
+                with st.container(key="login_submit"):
+                    submitted = st.form_submit_button("Enter")
+                if submitted:
+                    if password == configured_password:
+                        st.session_state.authenticated = True
+                        st.rerun()
+                    else:
+                        st.error("Incorrect password.")
 
     if not st.session_state.get("authenticated"):
         st.stop()
