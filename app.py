@@ -2942,7 +2942,8 @@ with tabs[3]:
             "Moves positions forward in calendar days with prices and vols held where they are, so you "
             "can see how P&L and Greeks change as options decay. An option that expires inside the horizon "
             "is exercised into futures if it is in the money at that point, and lapses worthless otherwise. "
-            "Select an individual contract to measure its Greeks, or a commodity summary to show only that "
+            "Select an individual contract to measure its Greeks (its Theta row is that contract's own decay; "
+            "PnL stays whole-book), or a commodity summary to show only that "
             "commodity's positions with Greeks aggregated across its contracts. Monetary values are shown "
             "in $K using the contract multiplier."
         )

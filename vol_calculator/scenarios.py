@@ -122,6 +122,16 @@ def spot_ladder_by_underlying(portfolio, market, commodity, metric, low=-50, hig
     return pd.DataFrame.from_dict(rows, orient="index", columns=moves)
 
 
+def _portfolio_for_contract(portfolio, contract):
+    """Just the legs on `contract` (structures split into their legs)."""
+
+    own = Portfolio()
+    for leg in _flatten_positions(portfolio.positions):
+        if leg.contract == contract:
+            own.add(leg)
+    return own
+
+
 def _portfolio_for_commodity(portfolio, commodity):
     filtered = Portfolio()
     for leg in _flatten_positions(portfolio.positions):
@@ -287,7 +297,8 @@ def decay_ladder(
     """
     PnL and Greeks as calendar days pass (0 to `horizon`, every `step`
     days), prices and vols held where they are. Delta/Gamma/Vega are
-    measured against `contract`, like the other ladders.
+    measured against `contract`, like the other ladders, and Theta is
+    the decay of `contract`'s own legs only; PnL and Rho stay whole-book.
     """
 
     days_list = list(range(0, horizon + 1, step))
@@ -302,13 +313,17 @@ def decay_ladder(
         decayed = shift_time(portfolio, days, market) if days else portfolio
         value = decayed.value(market)
 
+        theta_rho = _theta_rho(decayed, market)
+        if contract is not None:
+            theta_rho["Theta"] = GreekEngine.theta(_portfolio_for_contract(decayed, contract), market)
+
         rows.append({
             "Days Forward": days,
             "PnL": value - current_value,
             "Portfolio Value": value,
             "Delta": GreekEngine.delta(decayed, market, contract),
             "Gamma": GreekEngine.gamma(decayed, market, contract),
-            **_theta_rho(decayed, market),
+            **theta_rho,
             "Vega": GreekEngine.vega(decayed, market, contract),
         })
 
@@ -494,13 +509,8 @@ def gamma_theta_breakeven(portfolio, market, contract):
     when Gamma and Theta have the same sign (nothing to trade off).
     """
 
-    own = Portfolio()
-    for leg in _flatten_positions(portfolio.positions):
-        if leg.contract == contract:
-            own.add(leg)
-
     gamma = GreekEngine.gamma(portfolio, market, contract)
-    theta = GreekEngine.theta(own, market)
+    theta = GreekEngine.theta(_portfolio_for_contract(portfolio, contract), market)
 
     move = None
     if abs(gamma) > 1e-9 and gamma * theta < 0:
