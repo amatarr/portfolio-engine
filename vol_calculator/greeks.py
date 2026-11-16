@@ -1,6 +1,6 @@
 import copy
 
-from vol_calculator.instruments import Portfolio, Structure
+from vol_calculator.instruments import AmericanOption, ExpiredOption, IntrinsicOption, Portfolio, Structure
 
 VOL_POINT = 0.01
 
@@ -38,13 +38,33 @@ def shift_portfolio_vols(portfolio, dv, contract=None):
     return shocked
 
 
-def shift_time(portfolio, days):
-    """Time decay applies to the whole book regardless of contract."""
+def _shift_leg_time(leg, days, market):
+
+    if isinstance(leg, AmericanOption) and leg.expiry_days - days <= 0:
+        if market is None:
+            return IntrinsicOption(leg)
+        return ExpiredOption(leg, market.price_for(leg.contract))
+    return leg.shift_time(days)
+
+
+def shift_time(portfolio, days, market=None):
+    """
+    Moves the whole book `days` forward, regardless of contract. An option
+    that reaches its expiry on the way stops having time value:
+      - with `market` (for Greeks), it is exercised if in the money at that
+        market's price, otherwise it lapses -- a fixed decision, so price
+        bumps don't straddle the strike;
+      - without it (for P&L curves), it is worth its intrinsic value at
+        whatever price it is later valued at.
+    """
 
     shocked = Portfolio()
 
     for pos in portfolio.positions:
-        shocked.add(pos.shift_time(days))
+        if isinstance(pos, Structure):
+            shocked.add(Structure([_shift_leg_time(leg, days, market) for leg in pos.legs], name=pos.name))
+        else:
+            shocked.add(_shift_leg_time(pos, days, market))
 
     return shocked
 
@@ -111,7 +131,8 @@ class GreekEngine:
 
         tomorrow = shift_time(
             portfolio,
-            1
+            1,
+            market
         )
 
         return (

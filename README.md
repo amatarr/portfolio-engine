@@ -123,13 +123,17 @@ includes an underlying comparison table with
 one row per active contract, selectable commodity and measure, and columns matching the ladder's
 scenario controls. A Total row sums the selected measure across underlyings; Futures Price in the
 Price Ladder has no meaningful total. Options expiring during decay are exercised if in the money,
-otherwise they lapse.
+otherwise they lapse. The same rule applies everywhere the book is moved forward in time (Theta, the
+Stress charts against Days Forward, Payoff time steps and the Breakevens horizon), so an option's
+last-day Theta is its real final decay and daily Thetas add up to the Decay Ladder's P&L.
 
 The **Breakevens** tab charts the book's P&L a chosen number of days forward (default 1) against the
 selected contract's price, with the exact repriced curve, the quadratic Delta/Gamma/Theta estimate
 (drawn within 10% of the price), green/red profit and loss shading, and every zero crossing marked.
 Hover to read the P&L at any price. The table gives the nearest breakeven on each side as a price and
-a move in cents; the chart range (default ±30¢) widens to include them.
+a move in cents; the chart range (default ±30¢) widens to include them. Above the chart, the
+**gamma/theta breakeven** gives the daily move in ¢/bu, √(2·|Θ|/|Γ|) using the contract's own Gamma and
+Theta with Delta left out: any bigger move favours gamma, any smaller move favours theta.
 
 All analysis charts are interactive (Altair, built in `vol_calculator/charts.py`; `plotting.py` keeps the
 matplotlib versions for `demo.py`). Hover readouts run in the browser without rerunning the app.

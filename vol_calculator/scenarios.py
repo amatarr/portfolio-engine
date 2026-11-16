@@ -277,52 +277,6 @@ def vol_ladder_by_underlying(portfolio, market, commodity, metric, low=-10, high
     return pd.DataFrame.from_dict(rows, orient="index", columns=shifts)
 
 
-class _ExpiredOption:
-    """
-    An option leg past its expiry inside a decay scenario. In the money at
-    expiry (judged at the scenario's own price) it was exercised, so it now
-    behaves like the futures position it became: worth F - K (call) or
-    K - F (put) per unit, delta +/-1, no gamma. Otherwise it's worthless.
-    Using that fixed exercise decision rather than max(F - K, 0) keeps the
-    Greeks' price bumps from straddling the payoff's kink at the strike.
-    """
-
-    def __init__(self, leg, expiry_price):
-        self.leg = leg
-        self.contract = leg.contract
-        self.quantity = leg.quantity
-        sign = 1.0 if leg.option_type == "call" else -1.0
-        self._sign = sign if sign * (expiry_price - leg.strike) > 0 else 0.0
-
-    def price(self, market):
-        return self.quantity * self._sign * (market.price_for(self.contract) - self.leg.strike)
-
-    def shift_vol(self, dv):
-        return self
-
-    def shift_time(self, days):
-        return self
-
-
-def _decay_leg(leg, days, market):
-
-    if isinstance(leg, AmericanOption) and leg.expiry_days - days <= 0:
-        return _ExpiredOption(leg, market.price_for(leg.contract))
-    return leg.shift_time(days)
-
-
-def _decay_portfolio(portfolio, days, market):
-    """Moves the whole book `days` forward; options that expire on the way are exercised or lapse."""
-
-    decayed = Portfolio()
-    for pos in portfolio.positions:
-        if isinstance(pos, Structure):
-            decayed.add(Structure([_decay_leg(leg, days, market) for leg in pos.legs], name=pos.name))
-        else:
-            decayed.add(_decay_leg(pos, days, market))
-    return decayed
-
-
 def decay_ladder(
     portfolio,
     market,
@@ -345,7 +299,7 @@ def decay_ladder(
 
     for days in days_list:
 
-        decayed = _decay_portfolio(portfolio, days, market) if days else portfolio
+        decayed = shift_time(portfolio, days, market) if days else portfolio
         value = decayed.value(market)
 
         rows.append({
@@ -373,7 +327,7 @@ def commodity_decay_ladder(portfolio, market, commodity, horizon=60, step=5):
     current_value = commodity_portfolio.value(market)
     rows = []
     for days in days_list:
-        decayed = _decay_portfolio(commodity_portfolio, days, market) if days else commodity_portfolio
+        decayed = shift_time(commodity_portfolio, days, market) if days else commodity_portfolio
         value = decayed.value(market)
         greeks = _commodity_ladder_greeks(decayed, market, contracts)
         rows.append({
@@ -528,6 +482,31 @@ def breakevens_quadratic(portfolio, market, contract=None, max_move_pct=0.10, da
         "downside": moves[0] if abs(moves[0]) <= limit else None,
         "upside": moves[1] if abs(moves[1]) <= limit else None,
     }
+
+
+def gamma_theta_breakeven(portfolio, market, contract):
+    """
+    The daily move (cents, either direction) at which the given contract's
+    gamma P&L, 1/2 * Gamma * dF^2, equals its one-day Theta: sqrt(2|Theta|/|Gamma|).
+    Bigger moves favour gamma, smaller ones favour theta. Delta is left out
+    (as if hedged), and Theta is only that contract's own legs' decay, so
+    other contracts don't skew it. "move" is None when there's no gamma or
+    when Gamma and Theta have the same sign (nothing to trade off).
+    """
+
+    own = Portfolio()
+    for leg in _flatten_positions(portfolio.positions):
+        if leg.contract == contract:
+            own.add(leg)
+
+    gamma = GreekEngine.gamma(portfolio, market, contract)
+    theta = GreekEngine.theta(own, market)
+
+    move = None
+    if abs(gamma) > 1e-9 and gamma * theta < 0:
+        move = math.sqrt(2 * abs(theta) / abs(gamma))
+
+    return {"move": move, "gamma": gamma, "theta": theta}
 
 
 def _forward_pnl(portfolio, market, contract, days):
@@ -1015,7 +994,7 @@ def stress_table(portfolio, market, greek, axis, magnitudes, contract=None, incl
                 else greek_fn(portfolio, shocked_market, contract)
 
         elif axis == "time":
-            shocked_portfolio = shift_time(portfolio, level)
+            shocked_portfolio = shift_time(portfolio, level, market)
             value = greek_fn(shocked_portfolio, market) if greek == "theta" \
                 else greek_fn(shocked_portfolio, market, contract)
 
