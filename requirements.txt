@@ -1,10 +1,7 @@
 pandas
 QuantLib
-seaborn
-matplotlib
 scipy
 streamlit==1.64.0
 requests
 openpyxl
 supabase
-xlwings

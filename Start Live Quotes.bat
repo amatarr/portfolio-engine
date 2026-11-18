@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-echo Starting live quotes push loop (Excel -> Supabase -> Streamlit).
+echo Starting live quotes push loop (Live_Quotes.xls -> Supabase -> Streamlit).
 echo Leave this window open while you want live prices on the website.
 echo Closing this window stops the live updates.
 echo.

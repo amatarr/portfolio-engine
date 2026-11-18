@@ -284,3 +284,32 @@ def approx_option_expiry_days(contract, today=None):
         expiry_date -= timedelta(days=1)
 
     return max((expiry_date - today).days, 1)
+
+
+def is_expired_contract(contract, today=None):
+    """True once a futures contract is past its last trading day; False if the code doesn't parse."""
+
+    last = last_trading_date(contract)
+    return last is not None and last < (today or date.today())
+
+
+def active_contracts(commodity, count=6, today=None):
+    """
+    The next `count` listed futures of `commodity` still trading on
+    `today` (a contract stays in until its last trading day has passed),
+    e.g. Corn on 2026-12-15 -> ZCH27, ZCK27, ZCN27, ZCU27, ZCZ27, ZCH28.
+    """
+
+    today = today or date.today()
+    months = sorted(COMMODITIES[commodity]["months"], key=_CME_MONTH_TO_NUMBER.get)
+    contracts = []
+    year = today.year
+    while len(contracts) < count:
+        for month in months:
+            code = contract_code(commodity, month, year)
+            if not is_expired_contract(code, today):
+                contracts.append(code)
+                if len(contracts) == count:
+                    break
+        year += 1
+    return contracts

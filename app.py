@@ -39,6 +39,7 @@ from vol_calculator import (
     breakeven_curve,
     breakeven_roots,
     gamma_theta_breakeven,
+    portfolio_for_contract,
     strike_map,
     spot_vol_surface,
     stress_report,
@@ -55,6 +56,7 @@ from vol_calculator import (
     option_expiry_candidates,
     first_notice_date,
     last_trading_date,
+    is_expired_contract,
 )
 from vol_calculator import charts
 
@@ -154,30 +156,39 @@ def _fetch_supabase_quotes(url, anon_key):
     ]
 
 
-def _load_live_quotes():
+def _load_live_quotes(include_expired=False):
     """
     Prefers Supabase (fed by push_quotes_supabase.py reading live CQGXL
     cells off the open workbook) -- works both locally and on the
     deployed app, since it's a normal outbound read, not a local file.
     Falls back to the local CQGXL export file (local-only), then to
-    empty if neither is available.
+    empty if neither is available. Contracts past their last trading day
+    are left out unless include_expired, which still prices a position
+    held on one with its last quote.
     """
 
     supabase_url = st.secrets.get("supabase_url")
     supabase_anon_key = st.secrets.get("supabase_anon_key")
 
+    quotes = []
     if supabase_url and supabase_anon_key:
         try:
             quotes = _fetch_supabase_quotes(supabase_url, supabase_anon_key)
-            if quotes:
-                return quotes
         except Exception:
-            pass
+            quotes = []
 
-    try:
-        return import_cqg_quotes(_CQG_QUOTES_PATH)
-    except FileNotFoundError:
-        return []
+    if not quotes:
+        try:
+            quotes = import_cqg_quotes(_CQG_QUOTES_PATH)
+        except FileNotFoundError:
+            quotes = []
+
+    # A row whose contract isn't a contract code (e.g. a price pushed
+    # into the contract column) has no last trading day: never a quote.
+    quotes = [q for q in quotes if last_trading_date(str(q["contract"])) is not None]
+    if include_expired:
+        return quotes
+    return [q for q in quotes if not is_expired_contract(q["contract"])]
 
 
 def _require_password():
@@ -2447,7 +2458,7 @@ market = st.session_state.market
 # single rerun from here on, including the very next page load.
 _unpriced = [c for c in _contracts_in_portfolio(portfolio) if c not in market.futures_prices]
 if _unpriced:
-    _live_fallback = {q["contract"]: q["price"] for q in _load_live_quotes()}
+    _live_fallback = {q["contract"]: q["price"] for q in _load_live_quotes(include_expired=True)}
     _still_unpriced = {c for c in _unpriced if c not in _live_fallback}
 
     for c in _unpriced:
@@ -2723,7 +2734,8 @@ with tabs[1]:
         _prices_as_of_caption()
         _tab_help(
             "Recomputes P&L and Greeks across futures-price moves. Select an individual contract to shock "
-            "only that underlying, or a commodity summary to apply each move in parallel across all of that "
+            "only that underlying (every row, Theta and Rho included, covers only that contract's positions), "
+            "or a commodity summary to apply each move in parallel across all of that "
             "commodity's contracts. Summary results include only that commodity's positions. Monetary "
             "values are shown in $K using the contract multiplier."
         )
@@ -2748,7 +2760,8 @@ with tabs[1]:
                 }
             else:
                 ladder = spot_ladder(
-                    portfolio, market, contract=price_selection, low=spot_low, high=spot_high,
+                    portfolio_for_contract(portfolio, price_selection), market,
+                    contract=price_selection, low=spot_low, high=spot_high,
                     step=spot_step, with_theta_rho=True,
                 )
                 price_labels = PRICE_LADDER_LABELS
@@ -2835,7 +2848,8 @@ with tabs[2]:
         _prices_as_of_caption()
         _tab_help(
             "Recomputes P&L and Greeks across volatility shifts. Select an individual contract to shift "
-            "only its options, or a commodity summary to shift options across all of that commodity's "
+            "only its options (every row, Theta and Rho included, covers only that contract's positions), "
+            "or a commodity summary to shift options across all of that commodity's "
             "contracts in parallel. Summary results include only that commodity's positions. Monetary "
             "values are shown in $K using the contract multiplier."
         )
@@ -2861,7 +2875,8 @@ with tabs[2]:
                 )
             else:
                 vladder = vol_ladder(
-                    portfolio, market, contract=vol_selection, low=vol_low, high=vol_high, step=vol_step,
+                    portfolio_for_contract(portfolio, vol_selection), market,
+                    contract=vol_selection, low=vol_low, high=vol_high, step=vol_step,
                     with_theta_rho=True,
                 )
             vladder = _ladder_money_in_thousands(vladder, market)
@@ -2942,8 +2957,8 @@ with tabs[3]:
             "Moves positions forward in calendar days with prices and vols held where they are, so you "
             "can see how P&L and Greeks change as options decay. An option that expires inside the horizon "
             "is exercised into futures if it is in the money at that point, and lapses worthless otherwise. "
-            "Select an individual contract to measure its Greeks (its Theta row is that contract's own decay; "
-            "PnL stays whole-book), or a commodity summary to show only that "
+            "Select an individual contract to decay only that contract's positions (every row, PnL included, "
+            "covers just that contract), or a commodity summary to show only that "
             "commodity's positions with Greeks aggregated across its contracts. Monetary values are shown "
             "in $K using the contract multiplier."
         )
@@ -2965,7 +2980,8 @@ with tabs[3]:
                 )
             else:
                 dladder = decay_ladder(
-                    portfolio, market, contract=decay_selection, horizon=decay_horizon, step=decay_step
+                    portfolio_for_contract(portfolio, decay_selection), market,
+                    contract=decay_selection, horizon=decay_horizon, step=decay_step,
                 )
             dladder = _ladder_money_in_thousands(dladder, market)
             dladder = _transposed_ladder(

@@ -219,3 +219,51 @@ class Structure:
             output.append(f"  {leg}")
 
         return "\n".join(output)
+
+
+def compute_model_price(instrument, meta, market):
+    """
+    The leg's own theoretical price, computed fresh from its own
+    parameters using the same Black-76-based American-exercise pricer
+    (AmericanOptionPricer, Barone-Adesi-Whaley on a Black process) that
+    Greeks already use everywhere else -- not copied from Settlement
+    Price, which can be a frozen CSV-reported value.
+
+    For a Future, this is just its contract's current engine price
+    (market.price_for) -- which can differ from a frozen Settlement
+    Price if the market has moved since the CSV was generated. For a
+    Call/Put, it's the actual computed premium from strike/expiry/vol/
+    rate, which can likewise differ from a broker-reported settlement.
+
+    Returns None if the contract has no price in market, or if pricing
+    otherwise fails (e.g. a manually-added option with not-yet-valid
+    inputs) -- callers should treat that as "can't be shown yet", not
+    crash the whole refresh over it.
+    """
+
+    contract = meta.get("contract")
+    try:
+        underlying_price = market.price_for(contract)
+    except (KeyError, ValueError):
+        return None
+
+    if isinstance(instrument, Future):
+        return round(underlying_price, 4)
+
+    if isinstance(instrument, AmericanOption):
+        try:
+            return round(
+                AmericanOptionPricer(
+                    futures_price=underlying_price,
+                    strike=instrument.strike,
+                    rate=market.interest_rate,
+                    volatility=instrument.volatility,
+                    expiry_days=instrument.expiry_days,
+                    option_type=instrument.option_type,
+                ).price(),
+                4,
+            )
+        except Exception:
+            return None
+
+    return None

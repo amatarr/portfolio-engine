@@ -9,8 +9,6 @@ requires-python = ">=3.9"
 dependencies = [
     "pandas",
     "QuantLib",
-    "seaborn",
-    "matplotlib",
     "scipy",
     "streamlit",
     "requests",

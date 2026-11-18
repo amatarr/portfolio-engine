@@ -21,6 +21,16 @@ def _convert_cqg_symbol(symbol):
     return s[:2] + s[3:]
 
 
+# CQG's root (with its filler letter) for each of this app's 2-letter roots.
+_CQG_ROOTS = {"ZC": "ZCE", "ZS": "ZSE", "ZW": "ZWA"}
+
+
+def to_cqg_symbol(contract):
+    """Inverse of _convert_cqg_symbol: "ZCZ26" -> "ZCEZ26", "ZWH27" -> "ZWAH27"."""
+
+    return _CQG_ROOTS[contract[:2]] + contract[2:]
+
+
 def import_cqg_quotes(path):
     """
     Reads the CQGXL "RT links" export, columns O/P: a commodity header

@@ -2,8 +2,7 @@
 Interactive (Altair / Vega-Lite) charts for the Streamlit app. Each builder
 takes a table the scenario functions already return and gives back an
 Altair chart. Hover readouts run in the browser, so they never rerun the
-app or reprice anything. plotting.py keeps the matplotlib versions for
-demo.py and notebooks.
+app or reprice anything.
 """
 
 import math

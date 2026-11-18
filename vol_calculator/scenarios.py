@@ -60,8 +60,7 @@ def spot_ladder(
 ):
     """
     low/high/step are absolute cents moves on `contract`'s price, not percentages.
-    with_theta_rho adds Theta and Rho (before Vega) at each price level; off by
-    default so the Excel ladder sheet keeps its columns.
+    with_theta_rho adds Theta and Rho (before Vega) at each price level.
     """
 
     rows = []
@@ -122,7 +121,7 @@ def spot_ladder_by_underlying(portfolio, market, commodity, metric, low=-50, hig
     return pd.DataFrame.from_dict(rows, orient="index", columns=moves)
 
 
-def _portfolio_for_contract(portfolio, contract):
+def portfolio_for_contract(portfolio, contract):
     """Just the legs on `contract` (structures split into their legs)."""
 
     own = Portfolio()
@@ -315,7 +314,7 @@ def decay_ladder(
 
         theta_rho = _theta_rho(decayed, market)
         if contract is not None:
-            theta_rho["Theta"] = GreekEngine.theta(_portfolio_for_contract(decayed, contract), market)
+            theta_rho["Theta"] = GreekEngine.theta(portfolio_for_contract(decayed, contract), market)
 
         rows.append({
             "Days Forward": days,
@@ -510,7 +509,7 @@ def gamma_theta_breakeven(portfolio, market, contract):
     """
 
     gamma = GreekEngine.gamma(portfolio, market, contract)
-    theta = GreekEngine.theta(_portfolio_for_contract(portfolio, contract), market)
+    theta = GreekEngine.theta(portfolio_for_contract(portfolio, contract), market)
 
     move = None
     if abs(gamma) > 1e-9 and gamma * theta < 0:

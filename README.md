@@ -3,8 +3,6 @@
 Futures + American-option portfolio risk engine (QuantLib-based Greeks, scenario ladders, multi-leg
 structures, breakevens, payoff diagrams) with a Streamlit UI.
 
-See `VolCalculator_Full_Documentation.pdf` for the complete mathematical and implementation reference.
-
 ## Local setup
 
 ```
@@ -55,6 +53,20 @@ falls back to the local `_autosave_portfolio.csv`.
 One-time setup: run `supabase_saved_portfolios.sql` in the Supabase dashboard (SQL Editor). The app
 uses the existing `supabase_url` / `supabase_anon_key` secrets.
 
+## Live quotes
+
+`Start Live Quotes.bat` runs `push_quotes_supabase.py` on the machine with Excel and CQGXL. It reads
+the CQGXL prices on `Live_Quotes.xls` (sheet Quotes, named blocks `Watchlist_Corn`,
+`Watchlist_Soybean`, `Watchlist_Wheat`) every 5 seconds and pushes them to the Supabase `Quotes`
+table, which the app reads. The watchlist maintains itself: at start-up and each new day the pusher
+writes the next 6 listed contracts per commodity that are still trading (a contract stays until its
+last trading day, the business day before the 15th), so expired months drop off and the next month is
+added. The workbook is created if it is missing; the pusher needs `xlwings` installed locally.
+`py push_quotes_supabase.py --dry-run --once --today 2026-12-15` rolls and reads the watchlist for a
+chosen date without touching Supabase. The app ignores rows whose contract isn't a contract code, and
+hides quotes for contracts past their last trading day, but still uses the last one to price a
+position held on such a contract.
+
 ## Portfolio screen
 
 The Market panel shows compact quote tables for the available commodities. Portfolio management
@@ -91,8 +103,7 @@ decimals. The table
 lot detail also includes a First Notice column for futures (CBOT: last business day of the month before delivery). Futures show Expiry (d) as days to the CBOT last trading day (the business day before the 15th
 of the contract month). Expired options are left out of the analysis tabs. A Calendar Spread can put its far leg on a later
 contract of the same commodity (e.g. Dec against Mar), each leg priced off its own underlying,
-with an optional far strike. In the app, long 1 calendar means buy near, sell far; the Excel workbook's
-Add Leg still sells near and buys far. In Add Leg, structures show one line per leg, each with its own Entry
+with an optional far strike. Long 1 calendar means buy near, sell far. In Add Leg, structures show one line per leg, each with its own Entry
 Price; left blank, it is filled with that leg's TheoV when the structure is added.
 It refreshes every 10 seconds with live prices (Underlying Price, TheoV). Option expiries are stored
 as dates, so Expiry (d) counts down daily; expired options are greyed out until removed. Expiry values
@@ -116,7 +127,9 @@ each have their own tab, transposed (moves as columns, Greeks as rows with units
 green/red by size and negative Greeks in red. Each ladder selector offers a commodity summary as well
 as individual underlying contracts. A commodity summary isolates that commodity's positions and applies
 price or volatility shocks in parallel across its contracts; the decay summary advances only that
-commodity's positions through time. Price Ladder defaults are -20¢ to +20¢ in 2¢ steps, Vol Ladder
+commodity's positions through time. Selecting an individual contract limits every row of the
+ladder (PnL, Portfolio Value, Theta and Rho included) to that contract's positions, so it matches
+that contract's row in the comparison table. Price Ladder defaults are -20¢ to +20¢ in 2¢ steps, Vol Ladder
 defaults are -5 to +5 vol points in 1-point steps (with step sizes adjustable to 0.1 points), and
 Decay Ladder defaults to a 30-day horizon in 2-day steps. All values remain adjustable. Each ladder
 includes an underlying comparison table with
@@ -135,8 +148,7 @@ a move in cents; the chart range (default ±30¢) widens to include them. Above 
 **gamma/theta breakeven** gives the daily move in ¢/bu, √(2·|Θ|/|Γ|) using the contract's own Gamma and
 Theta with Delta left out: any bigger move favours gamma, any smaller move favours theta.
 
-All analysis charts are interactive (Altair, built in `vol_calculator/charts.py`; `plotting.py` keeps the
-matplotlib versions for `demo.py`). Hover readouts run in the browser without rerunning the app.
+All analysis charts are interactive (Altair, built in `vol_calculator/charts.py`). Hover readouts run in the browser without rerunning the app.
 **Payoff** draws each time step and the at-expiry payoff (dashed grey) over a ±% range (default 10%),
 marks each curve's zero crossings, lists the nearest ones in a table, and lets you click a legend entry
 to highlight a curve; invalid time steps show a warning. **Surface** is a heatmap with higher prices at
@@ -148,10 +160,6 @@ price and volatility moves applied in parallel across its contracts.
 
 ## Project layout
 
-- `vol_calculator/` -- the core package (pricing, Greeks, scenarios, structures, plotting, CSV I/O).
+- `vol_calculator/` -- the core package (pricing, Greeks, scenarios, structures, charts, CSV I/O).
 - `app.py` -- the Streamlit UI, a thin layer over `vol_calculator`.
-- `demo.py` -- a plain-script entry point (no UI) for the same demo portfolio.
-- `PositionCalculator.ipynb` -- the original notebook, kept as a frozen historical reference; all
-  further development happens in `vol_calculator/` and `app.py`, not the notebook.
-- `launcher.py` -- bootstraps Streamlit programmatically; used to build a standalone executable via
-  PyInstaller.
+- `push_quotes_supabase.py` / `Start Live Quotes.bat` -- the live quote pusher (see Live quotes).
