@@ -80,6 +80,8 @@ Each summary row has an inline expand/collapse control; its editable lot table a
 that row. Summary rows sort by numeric Expiry (d), ascending; expired positions appear first and
 positions without a defined expiry appear last. This uses native Streamlit columns rather than a
 dedicated tree-grid component, so the summary rows do not have interactive column sorting or resizing.
+Summary section and row keys are unique per commodity, allowing multiple commodity sections to render
+without Streamlit duplicate-element-key errors.
 The positions section is centered and capped at 1600 pixels wide, with compact gaps between summary
 columns; Expiry, Entry Vol, Current Vol, and Trade Count values are centered below their headers.
 Current Vol edits in the detail table apply to every matching option lot, while Greek calculations

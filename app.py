@@ -1480,7 +1480,7 @@ def _render_positions():
             ("Trade Count", 0.85),
         ]
         summary_widths = [0.35] + [width for _, width in summary_columns]
-        with st.container(key="positions_summary_header"):
+        with st.container(key=f"positions_summary_header_{group_commodity}"):
             header_columns = st.columns(summary_widths, gap="xxsmall")
             header_columns[0].caption("")
             for column, (name, _) in zip(header_columns[1:], summary_columns):
@@ -1490,7 +1490,7 @@ def _render_positions():
             group_state_key = (group_commodity, risk_key)
             is_expanded = group_state_key in expanded_groups
             with st.container(border=True):
-                with st.container(key=f"positions_summary_row_{group_number}"):
+                with st.container(key=f"positions_summary_row_{group_commodity}_{group_number}"):
                     row_columns = st.columns(summary_widths, gap="xxsmall")
                     if row_columns[0].button(
                         "-" if is_expanded else "+",
