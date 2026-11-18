@@ -157,6 +157,10 @@ def _fetch_supabase_quotes(url, anon_key):
     ]
 
 
+def _refresh_greek_quotes():
+    _fetch_supabase_quotes.clear()
+
+
 def _load_live_quotes(include_expired=False):
     """
     Prefers Supabase (fed by push_quotes_supabase.py reading live CQGXL
@@ -2615,14 +2619,19 @@ with tabs[0]:
             ]
             if not available_commodities:
                 st.info("No active commodities found in the current positions.")
-            selector_cols = st.columns([1, 4], gap="small")
+            selector_cols = st.columns([1, 0.25, 4], gap="small", vertical_alignment="bottom")
             if available_commodities:
-                with selector_cols[0]:
-                    tenor_commodity = st.selectbox(
-                        "Commodity",
-                        available_commodities,
-                        key="tenor_commodity",
-                    )
+                tenor_commodity = selector_cols[0].selectbox(
+                    "Commodity",
+                    available_commodities,
+                    key="tenor_commodity",
+                )
+                selector_cols[1].button(
+                    "↻",
+                    key="refresh_greek_summary",
+                    help="Fetch the latest futures quotes and recalculate Greeks.",
+                    on_click=_refresh_greek_quotes,
+                )
 
             if available_commodities:
                 tenor_groups = report_by_tenor_groups(
