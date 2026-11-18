@@ -38,6 +38,7 @@ from vol_calculator import (
     breakevens_numerical,
     breakeven_curve,
     breakeven_roots,
+    gamma_theta_breakeven,
     strike_map,
     spot_vol_surface,
     stress_report,
@@ -2270,6 +2271,21 @@ def _render_breakevens(portfolio, market, contract, days, range_cents):
     crossing marked and the nearest one on each side summarised.
     """
 
+    gt = gamma_theta_breakeven(portfolio, market, contract)
+    if gt["move"] is not None:
+        side = (
+            " You are short gamma, so the small moves are the ones that pay you."
+            if gt["gamma"] < 0 else ""
+        )
+        st.markdown(
+            f"**Gamma/theta breakeven: {gt['move']:.2f}¢/bu per day.** Any daily move bigger than this "
+            f"favours gamma; any move smaller favours theta.{side}"
+        )
+    elif abs(gt["gamma"]) <= 1e-9:
+        st.markdown(f"**Gamma/theta breakeven:** no gamma on {contract}.")
+    else:
+        st.markdown(f"**Gamma/theta breakeven:** none on {contract} -- gamma and theta are on the same side.")
+
     base_price = market.price_for(contract)
     search_pct = 0.5
     roots = breakeven_roots(portfolio, market, contract, search_pct=search_pct, days=days)
@@ -2926,7 +2942,8 @@ with tabs[3]:
             "Moves positions forward in calendar days with prices and vols held where they are, so you "
             "can see how P&L and Greeks change as options decay. An option that expires inside the horizon "
             "is exercised into futures if it is in the money at that point, and lapses worthless otherwise. "
-            "Select an individual contract to measure its Greeks, or a commodity summary to show only that "
+            "Select an individual contract to measure its Greeks (its Theta row is that contract's own decay; "
+            "PnL stays whole-book), or a commodity summary to show only that "
             "commodity's positions with Greeks aggregated across its contracts. Monetary values are shown "
             "in $K using the contract multiplier."
         )
@@ -3134,12 +3151,16 @@ with tabs[8]:
             "- **Quadratic** (dashed) is the fast estimate from today's Delta, Gamma and Theta. It is drawn "
             "only within 10% of the price, where it is reliable. If the two differ, trust Exact, especially "
             "for butterflies and collars.\n\n"
+            "The **gamma/theta breakeven** at the top is the size of daily move, in either direction, at "
+            "which the contract's gamma P&L (½·Γ·move²) equals its one-day Theta, with Delta left out as if "
+            "hedged: any bigger move favours gamma, any smaller move favours theta.\n\n"
             "The table gives the nearest breakeven on each side as a futures price, with the move from the "
             "current price in cents. Hover over the chart to read the P&L at any price. P&L is in \\$K "
             "using the contract multiplier.",
             formulas=[
                 r"\Delta\,\Delta F + \tfrac{1}{2}\Gamma\,\Delta F^2 + \Theta \cdot \text{days} = 0",
                 r"\Delta F = \frac{-\Delta \pm \sqrt{\Delta^2 - 2\Gamma\Theta \cdot \text{days}}}{\Gamma}",
+                r"\text{Gamma/theta breakeven} = \sqrt{2\,|\Theta|\,/\,|\Gamma|}",
             ],
         )
 

@@ -133,6 +133,57 @@ class AmericanOption:
         )
 
 
+class ExpiredOption:
+    """
+    An option leg moved past its expiry, for Greeks. In the money at expiry
+    (judged at `expiry_price`) it was exercised, so it now behaves like the
+    futures position it became: worth F - K (call) or K - F (put) per unit,
+    delta +/-1, no gamma. Otherwise it's worthless. Using that fixed exercise
+    decision rather than max(F - K, 0) keeps the Greeks' price bumps from
+    straddling the payoff's kink at the strike.
+    """
+
+    def __init__(self, leg, expiry_price):
+        self.leg = leg
+        self.contract = leg.contract
+        self.quantity = leg.quantity
+        sign = 1.0 if leg.option_type == "call" else -1.0
+        self._sign = sign if sign * (expiry_price - leg.strike) > 0 else 0.0
+
+    def price(self, market):
+        return self.quantity * self._sign * (market.price_for(self.contract) - self.leg.strike)
+
+    def shift_vol(self, dv):
+        return self
+
+    def shift_time(self, days):
+        return self
+
+
+class IntrinsicOption:
+    """
+    An option leg moved past its expiry, for P&L curves: worth its intrinsic
+    value, max(F - K, 0) or max(K - F, 0), at whatever price it is valued.
+    """
+
+    def __init__(self, leg):
+        self.leg = leg
+        self.contract = leg.contract
+        self.quantity = leg.quantity
+
+    def price(self, market):
+        spot = market.price_for(self.contract)
+        if self.leg.option_type.lower() == "call":
+            return self.quantity * max(spot - self.leg.strike, 0)
+        return self.quantity * max(self.leg.strike - spot, 0)
+
+    def shift_vol(self, dv):
+        return self
+
+    def shift_time(self, days):
+        return self
+
+
 class Structure:
 
     def __init__(self, legs, name=None):
