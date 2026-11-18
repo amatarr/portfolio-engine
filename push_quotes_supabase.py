@@ -36,6 +36,12 @@ PUSH_INTERVAL_SECONDS = 5
 CONTRACTS_PER_COMMODITY = 6
 XLS_FILE_FORMAT = 56  # Excel 97-2003 workbook
 
+# "Pushed by" cell on the Quotes sheet: the name typed next to the label
+# goes out with every price (the Quotes table's source column), and the
+# app shows it as "Live Quotes (<name>)".
+PUSHED_BY_LABEL_CELL = "D1"
+PUSHED_BY_CELL = "E1"
+
 # One named block per commodity on the Quotes sheet: a symbol column and
 # a price column, one row per contract.
 WATCHLIST_NAMES = {
@@ -105,6 +111,10 @@ def sync_watchlists(wb, today):
         block = sheet.range((top + 1, 1), (top + CONTRACTS_PER_COMMODITY, 2))
         wb.names.add(name, f"='{SHEET_NAME}'!{block.address}")
 
+    if sheet.range(PUSHED_BY_LABEL_CELL).value != "Pushed by":
+        sheet.range(PUSHED_BY_LABEL_CELL).value = "Pushed by"
+        changed += 1
+
     if changed:
         _save(wb)
     return changed
@@ -140,7 +150,23 @@ def read_live_quotes(wb):
     return quotes
 
 
-def push_once(client, quotes):
+def read_pushed_by(wb):
+    """The name in the "Pushed by" cell, or None when it's blank."""
+
+    try:
+        value = wb.sheets[SHEET_NAME].range(PUSHED_BY_CELL).value
+    except Exception:
+        return None
+    name = str(value).strip() if value is not None else ""
+    return name[:40] or None
+
+
+_source_column = True  # False once Supabase says the Quotes table has no source column
+
+
+def push_once(client, quotes, pushed_by=None):
+
+    global _source_column
 
     if not quotes:
         return 0
@@ -151,11 +177,28 @@ def push_once(client, quotes):
         {"contract": q["contract"], "price": q["price"], "updated_at": now}
         for q in quotes
     ]
+    if _source_column:
+        for row in rows:
+            row["source"] = pushed_by
 
     # One network round-trip for every contract instead of one per
     # contract -- at a short poll interval, 18 sequential calls (~100ms
     # each) was eating a meaningful chunk of the cycle budget on its own.
-    client.table(TABLE_NAME).upsert(rows, on_conflict="contract").execute()
+    try:
+        client.table(TABLE_NAME).upsert(rows, on_conflict="contract").execute()
+    except Exception as e:
+        if not _source_column or "source" not in str(e):
+            raise
+        # Prices keep flowing without the name until the column exists.
+        _source_column = False
+        print(
+            f'The {TABLE_NAME} table has no source column, so the "Pushed by" name is not sent. Run in the '
+            f'Supabase SQL Editor: alter table "{TABLE_NAME}" add column if not exists source text;'
+            " -- then restart this window."
+        )
+        for row in rows:
+            row.pop("source")
+        client.table(TABLE_NAME).upsert(rows, on_conflict="contract").execute()
 
     return len(quotes)
 
@@ -188,6 +231,7 @@ def main():
                 synced_for = today
 
             quotes = read_live_quotes(wb)
+            pushed_by = read_pushed_by(wb)
             if not quotes:
                 print(
                     f"No prices on {WORKBOOK_PATH} yet (cells show #N/A?) -- with more than one Excel "
@@ -196,9 +240,10 @@ def main():
             if client is None:
                 for q in quotes:
                     print(f"  {q['commodity']:<10} {q['contract']}  {q['price']}")
-                print(f"Read {len(quotes)} quote(s) (dry run, nothing pushed)")
+                print(f"Read {len(quotes)} quote(s), pushed by {pushed_by or '(blank)'} (dry run, nothing pushed)")
             else:
-                print(f"Pushed {push_once(client, quotes)} quote(s)")
+                n = push_once(client, quotes, pushed_by)
+                print(f"Pushed {n} quote(s) as {pushed_by or '(no name)'}" if _source_column else f"Pushed {n} quote(s)")
         except Exception as e:
             # Keep the loop alive through transient COM/network errors --
             # one bad cycle shouldn't stop future ones from refreshing.

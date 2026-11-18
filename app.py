@@ -151,6 +151,7 @@ def _fetch_supabase_quotes(url, anon_key):
             "contract": row["contract"],
             "price": row["price"],
             "updated_at": row.get("updated_at"),
+            "source": row.get("source"),
         }
         for row in resp.data
     ]
@@ -1253,14 +1254,23 @@ def _render_quotes_box():
             st.caption("No contracts yet -- add a leg below to start one.")
             return
 
-        timestamps = [q["updated_at"] for q in live_quotes if q.get("updated_at")]
-        if timestamps:
-            latest = max(timestamps)
+        # Named after whoever pushed the newest prices (the pusher's
+        # "Pushed by" cell, sent as the Quotes table's source column).
+        label = "Live Quotes"
+        newest = max(
+            (q for q in live_quotes if q.get("updated_at")), key=lambda q: q["updated_at"], default=None,
+        )
+        source = re.sub(r"[\\`*_\[\]<>#]", "", str((newest or {}).get("source") or "")).strip()
+        if source:
+            label += f" ({source})"
+        if newest:
             try:
-                dt = datetime.fromisoformat(latest)
-                st.caption(f"Last updated: {_format_last_updated(dt)}")
+                updated = _format_last_updated(datetime.fromisoformat(newest["updated_at"]))
             except ValueError:
-                st.caption(f"Last updated: {latest}")
+                updated = newest["updated_at"]
+            st.caption(f"**{label}** · Last updated: {updated}")
+        else:
+            st.caption(f"**{label}**")
 
         comm_cols = st.columns(len(contracts_by_commodity), gap="small")
 

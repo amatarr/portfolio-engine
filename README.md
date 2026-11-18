@@ -62,6 +62,10 @@ table, which the app reads. The watchlist maintains itself: at start-up and each
 writes the next 6 listed contracts per commodity that are still trading (a contract stays until its
 last trading day, the business day before the 15th), so expired months drop off and the next month is
 added. The workbook is created if it is missing; the pusher needs `xlwings` installed locally.
+The name typed next to **Pushed by** (cell E1 of the Quotes sheet) is sent with every price and shown
+on the site as **Live Quotes (name)**, using the name on the newest prices. It needs a one-time
+`alter table "Quotes" add column if not exists source text;` in the Supabase SQL Editor; until then
+prices are pushed without the name.
 `py push_quotes_supabase.py --dry-run --once --today 2026-12-15` rolls and reads the watchlist for a
 chosen date without touching Supabase. The app ignores rows whose contract isn't a contract code, and
 hides quotes for contracts past their last trading day, but still uses the last one to price a
