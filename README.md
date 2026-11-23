@@ -132,22 +132,23 @@ Use the refresh button next to the commodity selector to fetch fresh live quotes
 The Payoff Diagram defaults to a -10% to +10% futures-price range in 2-percentage-point increments.
 The **Price Ladder**,
 **Vol Ladder** and **Decay Ladder**
-each have their own tab, transposed (moves as columns, Greeks as rows with units), with PnL shaded
-green/red by size and negative Greeks in red. Each ladder selector offers a commodity summary as well
-as individual underlying contracts. A commodity summary isolates that commodity's positions and applies
-price or volatility shocks in parallel across its contracts; the decay summary advances only that
-commodity's positions through time. Selecting an individual contract limits every row of the
-ladder (PnL, Portfolio Value, Theta and Rho included) to that contract's positions, so it matches
-that contract's row in the comparison table. Price Ladder defaults are -20¢ to +20¢ in 2¢ steps, Vol Ladder
+each have their own tab, transposed (moves as columns, metrics as rows with units); PnL and Portfolio
+Value are omitted, and negative Greeks are red. Each ladder selector offers a commodity summary
+as well as individual underlying contracts. A commodity summary isolates that commodity's
+positions and applies price or volatility shocks in parallel across its contracts; the decay
+summary advances only that commodity's positions through time. Selecting an individual contract
+limits each displayed ladder metric to that contract's positions, so it matches that contract's row
+in the comparison table. Price Ladder defaults are -20¢ to +20¢ in 2¢ steps, Vol Ladder
 defaults are -5 to +5 vol points in 1-point steps (with step sizes adjustable to 0.1 points), and
 Decay Ladder defaults to a 30-day horizon in 2-day steps. All values remain adjustable. Each ladder
 includes an underlying comparison table with
-one row per active contract, selectable commodity and measure, and columns matching the ladder's
-scenario controls. A Total row sums the selected measure across underlyings; Futures Price in the
-Price Ladder has no meaningful total. Options expiring during decay are exercised if in the money,
-otherwise they lapse. The same rule applies everywhere the book is moved forward in time (Theta, the
-Stress charts against Days Forward, Payoff time steps and the Breakevens horizon), so an option's
-last-day Theta is its real final decay and daily Thetas add up to the Decay Ladder's P&L.
+one row per active contract, selectable commodity and measure (excluding PnL and Portfolio Value),
+and columns matching the ladder's scenario controls. A Total row sums the selected measure across
+underlyings; Futures Price in the Price Ladder has no meaningful total. Options expiring during
+decay are exercised if in the money, otherwise they lapse. The same rule applies everywhere the
+book is moved forward in time (Theta, Stress charts against Days Forward, Payoff time steps, and the
+Breakevens horizon), so an option's last-day Theta is its real final decay and daily Thetas add up
+to the Decay Ladder's P&L.
 
 The **Breakevens** tab charts the book's P&L a chosen number of days forward (default 1) against the
 selected contract's price, with the exact repriced curve, the quadratic Delta/Gamma/Theta estimate

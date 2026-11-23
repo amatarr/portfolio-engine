@@ -1069,20 +1069,6 @@ def _red_if_negative(v):
     return "color: #d32f2f" if pd.api.types.is_number(v) and v < 0 else ""
 
 
-def _pnl_shading(row):
-    """Green for profit, red for loss, deeper the further from zero (relative to the row's largest move)."""
-
-    scale = row.abs().max()
-    styles = []
-    for v in row:
-        if not scale or not v:
-            styles.append("")
-            continue
-        r, g, b = (46, 125, 50) if v > 0 else (211, 47, 47)
-        styles.append(f"background-color: rgba({r}, {g}, {b}, {0.12 + 0.5 * abs(v) / scale:.2f})")
-    return styles
-
-
 def _fmt_number(v, decimals=4):
     """Up to `decimals` places, trailing zeros dropped; blanks read "None" like the unstyled tables did."""
 
@@ -1118,14 +1104,30 @@ DECAY_LADDER_LABELS = {
 }
 
 
+def _comparison_labels(labels):
+    return {
+        key: value for key, value in labels.items()
+        if key not in ("PnL", "Portfolio Value")
+    }
+
+
+PRICE_COMPARISON_LABELS = _comparison_labels(PRICE_LADDER_LABELS)
+VOL_COMPARISON_LABELS = _comparison_labels(VOL_LADDER_LABELS)
+DECAY_COMPARISON_LABELS = _comparison_labels(DECAY_LADDER_LABELS)
+
+
 def _signed(suffix):
     return lambda m: f"{m:+g}{suffix}" if m else f"0{suffix}"
 
 
 def _transposed_ladder(ladder, move_col, labels, column_label):
-    """Moves become the columns, Greeks the rows (labelled with their units), in `labels` order."""
+    """Moves become columns and visible metrics become rows, labelled with units."""
 
-    table = ladder.set_index(move_col)[list(labels)].rename(columns=labels).T
+    display_labels = {
+        key: value for key, value in labels.items()
+        if key not in ("PnL", "Portfolio Value")
+    }
+    table = ladder.set_index(move_col)[list(display_labels)].rename(columns=display_labels).T
     table.columns = [column_label(m) for m in table.columns]
     table.index.name = "Greek"
     return table
@@ -1154,14 +1156,13 @@ def _prices_as_of_caption():
     st.caption(f"Prices as of {datetime.now(tz):%H:%M:%S}")
 
 
-def _show_ladder(table, pnl_label, price_label=None):
+def _show_ladder(table, price_label=None):
 
-    other_rows = [r for r in table.index if r not in (pnl_label, price_label)]
+    other_rows = [r for r in table.index if r != price_label]
     styler = (
         table.style
         .format(lambda v: f"{v:.3f}")
         .map(_red_if_negative, subset=pd.IndexSlice[other_rows, :])
-        .apply(_pnl_shading, axis=1, subset=pd.IndexSlice[[pnl_label], :])
     )
     if price_label:
         styler = styler.format(lambda v: f"{v:.2f}", subset=pd.IndexSlice[[price_label], :])
@@ -2542,19 +2543,19 @@ _TAB_SELECTOR_OPTIONS = {
         for contract in _contracts_in_portfolio(portfolio)
         if _commodity_from_contract(contract, fallback=None) in COMMODITIES
     },
-    "price_compare_metric": set(PRICE_LADDER_LABELS),
+    "price_compare_metric": set(PRICE_COMPARISON_LABELS),
     "vol_compare_commodity": {
         _commodity_from_contract(contract, fallback=None)
         for contract in _contracts_in_portfolio(portfolio)
         if _commodity_from_contract(contract, fallback=None) in COMMODITIES
     },
-    "vol_compare_metric": set(VOL_LADDER_LABELS),
+    "vol_compare_metric": set(VOL_COMPARISON_LABELS),
     "decay_compare_commodity": {
         _commodity_from_contract(contract, fallback=None)
         for contract in _contracts_in_portfolio(portfolio)
         if _commodity_from_contract(contract, fallback=None) in COMMODITIES
     },
-    "decay_compare_metric": set(DECAY_LADDER_LABELS),
+    "decay_compare_metric": set(DECAY_COMPARISON_LABELS),
     "surface_metric": None,
     "strike_weight": None,
     "strike_commodity": set(_strike_map_commodities(portfolio)),
@@ -2792,7 +2793,7 @@ with tabs[1]:
                 ladder, "Spot Move (¢)", price_labels, _signed("¢"),
             )
             price_label = price_labels.get("Futures Price")
-            _show_ladder(ladder, price_labels["PnL"], price_label)
+            _show_ladder(ladder, price_label)
             _download_df_button(ladder.round(3), "Download price ladder CSV", "price_ladder.csv")
 
             st.subheader("Compare Underlying Profiles")
@@ -2809,12 +2810,12 @@ with tabs[1]:
                         comparison_commodities,
                         key="price_compare_commodity",
                     )
-                comparison_metrics = list(PRICE_LADDER_LABELS)
+                comparison_metrics = list(PRICE_COMPARISON_LABELS)
                 with compare_selectors[1]:
                     compare_metric = st.selectbox(
                         "Measure",
                         comparison_metrics,
-                        format_func=PRICE_LADDER_LABELS.get,
+                        format_func=PRICE_COMPARISON_LABELS.get,
                         key="price_compare_metric",
                     )
 
@@ -2827,9 +2828,7 @@ with tabs[1]:
                     high=spot_high,
                     step=spot_step,
                 )
-                if compare_metric in {
-                    "PnL", "Portfolio Value", "Theta", "Rho", "Vega", "Volga", "Vanna-V",
-                }:
+                if compare_metric in {"Theta", "Rho", "Vega", "Volga", "Vanna-V"}:
                     comparison_table *= market.contract_multiplier / 1000
                 comparison_table.loc["Total"] = (
                     comparison_table.sum(axis=0)
@@ -2841,7 +2840,7 @@ with tabs[1]:
                 ]
                 comparison_table.index.name = "Underlying"
                 st.caption(
-                    f"Each row shows {PRICE_LADDER_LABELS[compare_metric]} for positions on that "
+                    f"Each row shows {PRICE_COMPARISON_LABELS[compare_metric]} for positions on that "
                     "underlying, shocked against its own futures price. Total sums the selected measure "
                     "across underlyings; Futures Price has no meaningful total. Uses the same price moves above."
                 )
@@ -2906,7 +2905,7 @@ with tabs[2]:
                 vladder,
                 "Vol Shift (pts)", VOL_LADDER_LABELS, _signed(" pts"),
             )
-            _show_ladder(vladder, VOL_LADDER_LABELS["PnL"])
+            _show_ladder(vladder)
             _download_df_button(vladder.round(3), "Download vol ladder CSV", "vol_ladder.csv")
 
             st.subheader("Compare Underlying Profiles")
@@ -2926,8 +2925,8 @@ with tabs[2]:
                 with compare_selectors[1]:
                     compare_metric = st.selectbox(
                         "Measure",
-                        list(VOL_LADDER_LABELS),
-                        format_func=VOL_LADDER_LABELS.get,
+                        list(VOL_COMPARISON_LABELS),
+                        format_func=VOL_COMPARISON_LABELS.get,
                         key="vol_compare_metric",
                     )
 
@@ -2940,9 +2939,7 @@ with tabs[2]:
                     high=vol_high,
                     step=vol_step,
                 )
-                if compare_metric in {
-                    "PnL", "Portfolio Value", "Theta", "Rho", "Vega", "Volga", "Vanna-V",
-                }:
+                if compare_metric in {"Theta", "Rho", "Vega", "Volga", "Vanna-V"}:
                     comparison_table *= market.contract_multiplier / 1000
                 comparison_table.loc["Total"] = comparison_table.sum(axis=0)
                 comparison_table.columns = [
@@ -2950,7 +2947,7 @@ with tabs[2]:
                 ]
                 comparison_table.index.name = "Underlying"
                 st.caption(
-                    f"Each row shows {VOL_LADDER_LABELS[compare_metric]} for positions on that "
+                    f"Each row shows {VOL_COMPARISON_LABELS[compare_metric]} for positions on that "
                     "underlying, shifted independently. Total sums the selected measure across "
                     "underlyings. Uses the same volatility shifts above."
                 )
@@ -3010,7 +3007,7 @@ with tabs[3]:
                 dladder,
                 "Days Forward", DECAY_LADDER_LABELS, lambda d: f"{d}d",
             )
-            _show_ladder(dladder, DECAY_LADDER_LABELS["PnL"])
+            _show_ladder(dladder)
             _download_df_button(dladder.round(3), "Download decay ladder CSV", "decay_ladder.csv")
 
             st.subheader("Compare Underlying Profiles")
@@ -3030,8 +3027,8 @@ with tabs[3]:
                 with compare_selectors[1]:
                     compare_metric = st.selectbox(
                         "Measure",
-                        list(DECAY_LADDER_LABELS),
-                        format_func=DECAY_LADDER_LABELS.get,
+                        list(DECAY_COMPARISON_LABELS),
+                        format_func=DECAY_COMPARISON_LABELS.get,
                         key="decay_compare_metric",
                     )
 
@@ -3043,9 +3040,7 @@ with tabs[3]:
                     horizon=decay_horizon,
                     step=decay_step,
                 )
-                if compare_metric in {
-                    "PnL", "Portfolio Value", "Theta", "Rho", "Vega",
-                }:
+                if compare_metric in {"Theta", "Rho", "Vega"}:
                     comparison_table *= market.contract_multiplier / 1000
                 comparison_table.loc["Total"] = comparison_table.sum(axis=0)
                 comparison_table.columns = [
@@ -3053,7 +3048,7 @@ with tabs[3]:
                 ]
                 comparison_table.index.name = "Underlying"
                 st.caption(
-                    f"Each row shows {DECAY_LADDER_LABELS[compare_metric]} for positions on that "
+                    f"Each row shows {DECAY_COMPARISON_LABELS[compare_metric]} for positions on that "
                     "underlying as time passes independently. Total sums the selected measure across "
                     "underlyings. Uses the same decay horizon and step above."
                 )
