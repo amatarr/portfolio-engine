@@ -1444,7 +1444,10 @@ def _render_positions():
             key=lambda item: (
                 float(item[1][0]["Expiry (d)"])
                 if pd.notna(item[1][0]["Expiry (d)"])
-                else math.inf
+                else math.inf,
+                float(item[1][0]["Strike"])
+                if pd.notna(item[1][0]["Strike"])
+                else math.inf,
             ),
         ))
 
