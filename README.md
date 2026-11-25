@@ -49,6 +49,12 @@ portfolio is then autosaved online in Supabase under that name, so users no long
 it survives redeploys. **Manage Portfolio > Saved portfolios** saves named copies, lists them (yours,
 or everyone's), and loads or deletes them. Without a user name, or if Supabase is unreachable, the app
 falls back to the local `_autosave_portfolio.csv`.
+Edits after a load go to the autosave only; the named save changes only when you save under its name
+again. Loading a save fills its name into the Save box, and saving over a name that already exists asks
+to confirm first. Above Current Positions, **Portfolio:** names the book on screen: the saved portfolio
+and its owner, the uploaded CSV or Daily Prop file, or "New (unsaved)" after Clear, with an "edited
+since loaded" badge once positions change. The name is kept in the URL (`?book=...`) so a refresh keeps
+it.
 
 One-time setup: run `supabase_saved_portfolios.sql` in the Supabase dashboard (SQL Editor). The app
 uses the existing `supabase_url` / `supabase_anon_key` secrets.
@@ -153,14 +159,19 @@ to the Decay Ladder's P&L.
 The **Breakevens** tab charts the book's P&L a chosen number of days forward (default 1) against the
 selected contract's price, with the exact repriced curve, the quadratic Delta/Gamma/Theta estimate
 (drawn within 10% of the price), green/red profit and loss shading, and every zero crossing marked.
-Hover to read the P&L at any price. The table gives the nearest breakeven on each side as a price and
-a move in cents; the chart range (default ±30¢) widens to include them. Above the chart, the
-**gamma/theta breakeven** gives the daily move in ¢/bu, √(2·|Θ|/|Γ|) using the contract's own Gamma and
-Theta with Delta left out: any bigger move favours gamma, any smaller move favours theta.
+Hover to read the P&L at any price. A row of cards above the chart gives the **gamma/theta breakeven**
+(the daily move in ¢/bu, √(2·|Θ|/|Γ|) using the contract's own Gamma and Theta with Delta left out: any
+bigger move favours gamma, any smaller move favours theta) and the nearest exact breakeven on each side
+as a price and a move in cents, with the quadratic estimate underneath; the chart range (default ±30¢)
+widens to include them. **Breakevens by contract** lays every contract in the book out as a column:
+futures price, long/short gamma, gamma/theta breakeven, the breakeven vol it implies (move × √365 /
+price, the vol the market must realise for gamma to pay for theta), and the options' average Current
+Vol. Its ATM IV row stays blank until a market option-vol feed is connected.
 
 All analysis charts are interactive (Altair, built in `vol_calculator/charts.py`). Hover readouts run in the browser without rerunning the app.
 **Payoff** draws each time step and the at-expiry payoff (dashed grey) over a ±% range (default 10%),
-marks each curve's zero crossings, lists the nearest ones in a table, and lets you click a legend entry
+marks each curve's zero crossings, lists the nearest ones in a table (T+0d's zero at today's price is
+left out: P&L is measured from the book's current value, so it is always 0 there), and lets you click a legend entry
 to highlight a curve; invalid time steps show a warning. **Surface** is a heatmap with higher prices at
 the top and today's cell outlined. **Strike Map** shows one commodity at a time, higher strikes on top,
 with blank cells where there is no position. **Stress** shows one chart per Greek and stressed variable,

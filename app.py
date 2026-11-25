@@ -694,6 +694,54 @@ def _current_user():
     return (st.session_state.get("app_user") or "").strip()
 
 
+def _book_source():
+    """
+    Where the book on screen came from: {"name", "owner", "edited"} -- the
+    saved portfolio or file last loaded (or saved), its owner or file kind,
+    and whether positions changed since. name is None for a new or
+    unnamed book. Mirrored in the URL (?book=...) so a refresh keeps it.
+    """
+
+    if "book_source" not in st.session_state:
+        st.session_state.book_source = {
+            "name": st.query_params.get("book") or None,
+            "owner": st.query_params.get("book_by") or None,
+            "edited": st.query_params.get("book_edited") == "1",
+        }
+    return st.session_state.book_source
+
+
+def _set_book_source(name=None, owner=None, edited=False):
+
+    st.session_state.book_source = {"name": name, "owner": owner, "edited": edited}
+    for key, value in (("book", name), ("book_by", owner), ("book_edited", "1" if edited else None)):
+        if value:
+            st.query_params[key] = value
+        elif key in st.query_params:
+            del st.query_params[key]
+
+
+def _mark_book_edited():
+    source = _book_source()
+    if source["name"] and not source["edited"]:
+        _set_book_source(source["name"], source["owner"], edited=True)
+
+
+def _render_book_label():
+    """The "Portfolio: <name> (<owner>)" line above Current Positions."""
+
+    source = _book_source()
+    clean = lambda text: re.sub(r"[\\`*_\[\]<>#:$]", "", str(text))
+    if source["name"]:
+        owner = f" ({clean(source['owner'])})" if source["owner"] else ""
+        edited = " :orange-badge[edited since loaded]" if source["edited"] else ""
+        st.markdown(f"**Portfolio:** :blue-badge[{clean(source['name'])}{owner}]{edited}")
+    elif st.session_state.portfolio.positions:
+        st.markdown("**Portfolio:** :gray-badge[Unnamed (not saved under a name)]")
+    else:
+        st.markdown("**Portfolio:** :gray-badge[New (unsaved)]")
+
+
 @st.cache_resource
 def _supabase_client(url, anon_key):
 
@@ -783,6 +831,12 @@ def _switch_user():
         st.session_state.portfolio, st.session_state.position_meta = _load_autosaved_portfolio()
         st.session_state.position_remove_selection.clear()
         st.session_state.setdefault("position_expanded_groups", set()).clear()
+        _set_book_source()  # that user's autosave: which saved book it was isn't recorded
+
+
+def _store_exists(user, name):
+    rows = _store_table().select("name").eq("user_name", user).eq("name", name).limit(1).execute().data
+    return bool(rows)
 
 
 def _autosave_portfolio():
@@ -1025,6 +1079,7 @@ def _handle_position_editor_change(editor_key, editor_row_map):
 
     if changed_positions:
         _autosave_portfolio()
+        _mark_book_edited()
     if changed_positions or changed_market:
         st.rerun(scope="app")
 
@@ -1360,18 +1415,48 @@ def _render_saved_portfolios():
             )
             return
 
+        # A load (further down, after this box is drawn) can't set the text
+        # box directly, so it leaves the name here for the next run.
+        if "prefill_save_name" in st.session_state:
+            st.session_state.save_portfolio_name = st.session_state.pop("prefill_save_name")
+
+        def save_as(name):
+            if _store_save(user, name, st.session_state.portfolio, st.session_state.position_meta):
+                _set_book_source(name, user)
+                st.success(f"Saved '{name}'.")
+            else:
+                st.error("Save failed -- online saving is unavailable right now.")
+
         name_col, save_col = st.columns([3, 1], vertical_alignment="bottom")
         save_name = name_col.text_input(
             "Save current portfolio as", key="save_portfolio_name", placeholder="e.g. Oct 29 book",
         )
         if save_col.button("Save", key="save_portfolio_btn"):
             name = save_name.strip()
+            st.session_state.pop("confirm_overwrite", None)
             if not name or name == _AUTOSAVE_NAME:
                 st.error("Enter a name for this save.")
-            elif _store_save(user, name, st.session_state.portfolio, st.session_state.position_meta):
-                st.success(f"Saved '{name}'.")
             else:
-                st.error("Save failed -- online saving is unavailable right now.")
+                try:
+                    exists = _store_exists(user, name)
+                except Exception:
+                    logger.exception("PORTFOLIO_STORE_EXISTS_FAILED")
+                    exists = False
+                if exists:
+                    st.session_state.confirm_overwrite = name
+                else:
+                    save_as(name)
+
+        pending = st.session_state.get("confirm_overwrite")
+        if pending:
+            st.warning(f"'{pending}' already exists. Overwrite it with the current portfolio?")
+            yes_col, no_col = st.columns(2)
+            if yes_col.button("Overwrite", key="confirm_overwrite_btn", type="primary"):
+                st.session_state.pop("confirm_overwrite")
+                save_as(pending)
+            if no_col.button("Cancel", key="cancel_overwrite_btn"):
+                st.session_state.pop("confirm_overwrite")
+                st.rerun()
 
         show_all = st.checkbox("Show other users' portfolios", key="saved_show_all")
         try:
@@ -1399,6 +1484,9 @@ def _render_saved_portfolios():
                 st.session_state.position_remove_selection.clear()
                 st.session_state.setdefault("position_expanded_groups", set()).clear()
                 _autosave_portfolio()
+                _set_book_source(choice[1], choice[0])
+                st.session_state.prefill_save_name = choice[1]
+                st.session_state.pop("confirm_overwrite", None)
                 st.rerun()
         if choice[0] == user and delete_col.button("Delete", key="delete_saved_btn"):
             _store_delete(*choice)
@@ -1594,6 +1682,7 @@ def _render_positions():
             selected_position_indices.clear()
             st.session_state.setdefault("position_expanded_groups", set()).clear()
             _autosave_portfolio()
+            _mark_book_edited()
             st.rerun()
 
 
@@ -1730,6 +1819,7 @@ def _render_position_lot_editor(
 # The user name lives in the URL (?user=...) so a refresh or bookmark keeps it.
 if "app_user" not in st.session_state:
     st.session_state.app_user = st.query_params.get("user", "")
+_book_source()  # read ?book=... before anything changes the URL
 
 if "portfolio" not in st.session_state:
     st.session_state.portfolio, st.session_state.position_meta = _load_autosaved_portfolio()
@@ -2092,6 +2182,7 @@ with st.container(border=True):
                         "entry_price": entry_price_input if is_future else None,
                     })
                     _autosave_portfolio()
+                    _mark_book_edited()
                     st.success(f"Added {leg_type}")
                 except Exception as e:
                     st.error(str(e))
@@ -2109,6 +2200,7 @@ with st.container(border=True):
                         st.session_state.setdefault("position_expanded_groups", set()).clear()
                         st.session_state.csv_locked_contracts = set()
                         _autosave_portfolio()
+                        _set_book_source()
                         st.rerun()
 
                 uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
@@ -2130,6 +2222,8 @@ with st.container(border=True):
                             st.session_state.position_remove_selection.clear()
                             st.session_state.setdefault("position_expanded_groups", set()).clear()
                             _autosave_portfolio()
+                            _set_book_source(uploaded.name, "CSV file")
+                            st.session_state.prefill_save_name = uploaded.name.rsplit(".", 1)[0]
                             st.success(f"Loaded {len(st.session_state.portfolio.positions)} position(s)")
                             st.rerun()
 
@@ -2171,6 +2265,7 @@ with st.container(border=True):
                                 imported = import_bushel_positions(
                                     tmp_path, as_of=daily_prop_as_of_date(imported_file.name),
                                 )
+                                was_empty = not st.session_state.portfolio.positions
                                 for instrument, meta in imported:
                                     st.session_state.portfolio.add(instrument)
                                     st.session_state.position_meta.append(meta)
@@ -2183,6 +2278,12 @@ with st.container(border=True):
                                         st.session_state.market.futures_prices[meta["contract"]] = meta["settlement_price"]
                                         st.session_state.csv_locked_contracts.add(meta["contract"])
                                 _autosave_portfolio()
+                                # Daily Prop adds to the book: it names a new book, or edits a loaded one.
+                                if was_empty and imported:
+                                    _set_book_source(imported_file.name, "Daily Prop")
+                                    st.session_state.prefill_save_name = imported_file.name.rsplit(".", 1)[0]
+                                elif imported:
+                                    _mark_book_edited()
                                 st.success(f"Added {len(imported)} imported position(s)")
                                 st.rerun()
                             except Exception as e:
@@ -2193,6 +2294,7 @@ with st.container(border=True):
     st.divider()
     with st.container(key="current_positions_section", width=1600):
         st.subheader("Current Positions")
+        _render_book_label()
         _render_positions()
 
 
@@ -2295,31 +2397,46 @@ def _tab_help(text, formulas=None):
 
 def _render_breakevens(portfolio, market, contract, days, range_cents):
     """
-    Breakeven chart and table for one contract: exact and quadratic
-    `days`-forward P&L against that contract's price, with every exact
-    crossing marked and the nearest one on each side summarised.
+    Breakeven chart for one contract: exact and quadratic `days`-forward
+    P&L against that contract's price, with every exact crossing marked.
+    The gamma/theta breakeven and the nearest breakeven on each side sit
+    in a row of cards above it.
     """
 
     gt = gamma_theta_breakeven(portfolio, market, contract)
-    if gt["move"] is not None:
-        side = (
-            " You are short gamma, so the small moves are the ones that pay you."
-            if gt["gamma"] < 0 else ""
-        )
-        st.markdown(
-            f"**Gamma/theta breakeven: {gt['move']:.2f}¢/bu per day.** Any daily move bigger than this "
-            f"favours gamma; any move smaller favours theta.{side}"
-        )
-    elif abs(gt["gamma"]) <= 1e-9:
-        st.markdown(f"**Gamma/theta breakeven:** no gamma on {contract}.")
-    else:
-        st.markdown(f"**Gamma/theta breakeven:** none on {contract} -- gamma and theta are on the same side.")
-
     base_price = market.price_for(contract)
     search_pct = 0.5
     roots = breakeven_roots(portfolio, market, contract, search_pct=search_pct, days=days)
     numeric = breakevens_numerical(portfolio, market, contract, search_pct=search_pct, days=days)
     quad = breakevens_quadratic(portfolio, market, contract, days=days)
+
+    gt_card, down_card, up_card = st.columns(3)
+    with gt_card, st.container(border=True):
+        if gt["move"] is not None:
+            gt_value, gt_note = f"{gt['move']:.2f}¢/day", (
+                "Short gamma: smaller daily moves pay you." if gt["gamma"] < 0
+                else "Long gamma: bigger daily moves pay you."
+            )
+        elif abs(gt["gamma"]) <= 1e-9:
+            gt_value, gt_note = "None", f"No gamma on {contract}."
+        else:
+            gt_value, gt_note = "None", "Gamma and theta are on the same side."
+        st.metric(
+            "Gamma/theta breakeven", gt_value,
+            help="The daily move at which gamma P&L equals one day of Theta, Delta left out (as if hedged).",
+        )
+        st.caption(gt_note)
+    for card, side in ((down_card, "downside"), (up_card, "upside")):
+        with card, st.container(border=True):
+            move = numeric[side]
+            st.metric(
+                f"{side.title()} breakeven (T+{days}d)",
+                f"{base_price + move:,.2f}" if move is not None else "None in range",
+                delta=f"{round(move, 2) + 0.0:+.2f}¢" if move is not None else None,
+                delta_color="off",
+                help="Nearest exact crossing on this side, as a futures price and a move from the current price.",
+            )
+            st.caption(f"Quadratic estimate: {charts.breakeven_label(base_price, quad[side])}")
 
     # Widen the chart to show the nearest breakeven on each side, within the search range.
     low, high = -range_cents, range_cents
@@ -2340,22 +2457,54 @@ def _render_breakevens(portfolio, market, contract, days, range_cents):
     if not any(True for _ in _option_legs(portfolio)):
         st.info("Futures only: P&L is a straight line with no time decay, so the breakeven is the current price.")
 
-    st.dataframe(
-        pd.DataFrame(
-            {
-                "Downside": [charts.breakeven_label(base_price, numeric["downside"]),
-                             charts.breakeven_label(base_price, quad["downside"])],
-                "Upside": [charts.breakeven_label(base_price, numeric["upside"]),
-                           charts.breakeven_label(base_price, quad["upside"])],
-            },
-            index=["Exact", "Quadratic (estimate)"],
-        ),
-        width="content",
-    )
-
     others = [r for r in roots if r not in (numeric["downside"], numeric["upside"])]
     if others:
         st.caption("Other crossings: " + ", ".join(charts.breakeven_label(base_price, r) for r in others))
+
+
+def _breakeven_by_contract(portfolio, market):
+    """
+    One column per contract in the book (commodity order), with the
+    contract's own gamma/theta breakeven as a daily move and as the
+    annualised vol that move implies (move * sqrt(365) / price), next to
+    its options' average Current Vol. ATM IV stays blank until a market
+    option-vol feed exists.
+    """
+
+    commodity_order = {commodity: index for index, commodity in enumerate(COMMODITIES)}
+    contracts = sorted(
+        _contracts_in_portfolio(portfolio),
+        key=lambda c: (commodity_order.get(_commodity_from_contract(c), len(commodity_order)), c),
+    )
+
+    columns = {}
+    for contract in contracts:
+        price = market.price_for(contract)
+        gt = gamma_theta_breakeven(portfolio, market, contract)
+        legs = [leg for leg in _option_legs(portfolio) if leg.contract == contract]
+        weight = sum(abs(leg.quantity) for leg in legs)
+        avg_vol = sum(abs(leg.quantity) * leg.volatility for leg in legs) / weight if weight else None
+
+        if gt["move"] is not None:
+            move, be_vol = f"{gt['move']:.2f}", f"{gt['move'] * math.sqrt(365) / price * 100:.2f}"
+        else:
+            move = be_vol = "--"
+        if abs(gt["gamma"]) <= 1e-9:
+            side = "--"
+        else:
+            side = "Long" if gt["gamma"] > 0 else "Short"
+
+        columns[contract] = {
+            "Commodity": _commodity_from_contract(contract),
+            "Futures price (¢/bu)": f"{price:,.2f}",
+            "Gamma": side,
+            "Gamma/theta breakeven (¢/day)": move,
+            "Breakeven vol (%)": be_vol,
+            "Current Vol, avg (%)": f"{avg_vol * 100:.2f}" if avg_vol is not None else "--",
+            "ATM IV (%)": "--",
+        }
+
+    return pd.DataFrame(columns)
 
 
 _MAX_PAYOFF_STEPS = 8
@@ -2408,12 +2557,16 @@ def _render_payoff(portfolio, market, contract, time_steps, range_pct):
     option_days = [leg.expiry_days for leg in _option_legs(portfolio)]
     past_expiry = [f"T+{days}d" for days in time_steps if option_days and days >= max(option_days)]
     if past_expiry:
-        st.caption(f"{', '.join(past_expiry)} is past every option's expiry, so it matches At Expiry.")
+        verb, pronoun = ("are", "they match") if len(past_expiry) > 1 else ("is", "it matches")
+        st.caption(f"{', '.join(past_expiry)} {verb} past every option's expiry, so {pronoun} At Expiry.")
 
     prices = curves["Futures Price"].tolist()
     table = {}
     for name in names:
-        moves = [root - base_price for root in charts.crossings(prices, curves[name].tolist())]
+        moves = [
+            root - base_price
+            for root in charts.payoff_crossings(prices, curves[name].tolist(), name, base_price)
+        ]
         down = [m for m in moves if m <= 0]
         up = [m for m in moves if m > 0]
         table[name] = {
@@ -2421,7 +2574,13 @@ def _render_payoff(portfolio, market, contract, time_steps, range_pct):
             "Upside": charts.breakeven_label(base_price, min(up) if up else None),
         }
     st.dataframe(pd.DataFrame.from_dict(table, orient="index"), width="content")
-    st.caption("Nearest breakevens within the chart range, read off each curve. The Breakevens tab finds them exactly.")
+    note = "Nearest breakevens within the chart range, read off each curve. The Breakevens tab finds them exactly."
+    if 0 in time_steps:
+        note += (
+            " P&L is measured from the book's current value, so T+0d is always 0 at today's price; "
+            "that point isn't counted as a breakeven."
+        )
+    st.caption(note)
 
 
 def _render_surface(portfolio, market, contract, metric, commodity):
@@ -3187,9 +3346,11 @@ with tabs[8]:
             "The **gamma/theta breakeven** at the top is the size of daily move, in either direction, at "
             "which the contract's gamma P&L (½·Γ·move²) equals its one-day Theta, with Delta left out as if "
             "hedged: any bigger move favours gamma, any smaller move favours theta.\n\n"
-            "The table gives the nearest breakeven on each side as a futures price, with the move from the "
-            "current price in cents. Hover over the chart to read the P&L at any price. P&L is in \\$K "
-            "using the contract multiplier.",
+            "The cards above the chart give the nearest breakeven on each side as a futures price, with the "
+            "move from the current price in cents and the quadratic estimate below it. **Breakevens by "
+            "contract** lays every contract out side by side: its gamma/theta breakeven, the vol that move "
+            "implies (move × √365 / price), and its options' average Current Vol. Hover over the chart to "
+            "read the P&L at any price. P&L is in \\$K using the contract multiplier.",
             formulas=[
                 r"\Delta\,\Delta F + \tfrac{1}{2}\Gamma\,\Delta F^2 + \Theta \cdot \text{days} = 0",
                 r"\Delta F = \frac{-\Delta \pm \sqrt{\Delta^2 - 2\Gamma\Theta \cdot \text{days}}}{\Gamma}",
@@ -3208,3 +3369,13 @@ with tabs[8]:
             if fs_contract:
                 with be_chart, st.spinner("Pricing breakevens..."):
                     _render_breakevens(portfolio, market, fs_contract, be_days, be_range)
+
+            st.markdown("**Breakevens by contract**")
+            with st.spinner("Pricing breakevens by contract..."):
+                st.dataframe(_breakeven_by_contract(portfolio, market), width="content")
+            st.caption(
+                "Each contract's own gamma/theta breakeven. Breakeven vol is that daily move annualised "
+                "(move × √365 / price): the vol the market has to realise for gamma to pay for theta. "
+                "Compare it with your options' average Current Vol. ATM IV fills in once a market "
+                "option-vol feed is connected."
+            )

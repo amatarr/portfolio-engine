@@ -62,6 +62,19 @@ def crossings(xs, ys):
     return found
 
 
+def payoff_crossings(prices, values, curve_name, base_price):
+    """
+    crossings() for one payoff curve, minus the T+0d curve's zero at
+    today's price: payoff P&L is measured from the book's current value,
+    so T+0d is 0 there by construction, which isn't a breakeven.
+    """
+
+    roots = crossings(prices, values)
+    if curve_name == "T+0d":
+        roots = [r for r in roots if abs(r - base_price) > 1e-3]
+    return roots
+
+
 def _zero_rule():
     return alt.Chart().mark_rule(color=GRAY, strokeWidth=1).encode(y=alt.datum(0))
 
@@ -216,7 +229,7 @@ def payoff_chart(curves, base_price, contract, curve_names):
     dots = [
         {"Curve": name, "Futures Price": root, "Zero": 0.0, "Label": breakeven_label(base_price, root - base_price)}
         for name in curve_names
-        for root in crossings(prices, curves[name].tolist())
+        for root in payoff_crossings(prices, curves[name].tolist(), name, base_price)
     ]
     if dots:
         layers.append(
